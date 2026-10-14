@@ -1,23 +1,38 @@
 # SerialMate CI — compile everything, then run the four unit tests.
 #
 # What this is for: a regression gate. Every push to main is built from
-# scratch with the same Qt and the same MinGW that README.md documents as
-# verified, and ctest has to stay green.
+# scratch and ctest has to stay green.
 #
 # What this is NOT for: acceptance. Anything that needs real hardware —
 # the COM5 TX-RX loopback, the GUI behaviour, the "copy the folder to
 # another PC" check — cannot run here and stays local.
 #
 # Why aqtinstall and not install-qt-action: aqt reproduces the layout of
-# the Qt online installer, so the kit lands in C:\Qt\<version>\<arch> and
-# the tools in C:\Qt\Tools\{mingw*_64,CMake_64,Ninja} — exactly the places
+# the Qt online installer, so the kit lands in C:\Qt\<version>\mingw_64 and
+# the tools in C:\Qt\Tools\{mingw1310_64,CMake_64,Ninja} — exactly the places
 # qt-env.bat already probes. That is what lets the step below run plain
 # `build.bat test`: the same script, unchanged, that a developer runs.
+#
+# Qt 6.8.3, not the 6.12.0 used on the dev machine. Reason: Qt changed the
+# layout of its online repository after 6.8 — the per-arch directory
+# became <version>_<arch> instead of <version> — and aqtinstall 3.3.0 only
+# knows the old one. Against the current repo it resolves the non-existent
+# path qt6_6120/qt6_6120/Updates.xml and gives up with "Failed to locate
+# XML data" for every Qt >= 6.11, verified against both 6.12.0 and 6.11.3.
+# Qt 6.x keeps source compatibility across minor versions, so building on
+# 6.8.3 still catches everything a regression gate should catch. Bumping
+# this line back to 6.12.0 is the whole change once aqt catches up.
 #
 # SerialPort is requested as a module on purpose. It is a separate Qt
 # repository (qt/qtserialport), NOT part of qtbase, so
 # find_package(Qt6 ... COMPONENTS SerialPort) fails without it — and it
 # never fails locally, because a full online install has everything.
+#
+# MinGW 13.1.0 is the toolchain Qt 6.8 was built with, and the same one
+# README.md reports as verified locally, so the compiler matches too.
+# Note the tool name is tools_mingw1310: plain tools_mingw is the legacy
+# tool, and leaving its variant off installs every MinGW ever shipped,
+# starting with 4.7.2.
 
 name: CI
 
@@ -36,7 +51,7 @@ jobs:
       # QGuiApplication and it needs a platform plugin. The runner does have
       # a desktop session, but offscreen makes that irrelevant.
       QT_QPA_PLATFORM: offscreen
-      QTDIR: C:\Qt\6.12.0\win64_mingw
+      QTDIR: C:\Qt\6.8.3\mingw_64
 
     steps:
       - uses: actions/checkout@v4
@@ -46,16 +61,16 @@ jobs:
           python -m pip install --upgrade pip
           python -m pip install aqtinstall
 
-      - name: Install Qt 6.12.0 (MinGW 64-bit) + SerialPort
+      # Positional order is host, target, version, arch. aqt rejects a
+      # version placed before the host instead of complaining about the
+      # download, so getting this wrong costs one CI round-trip.
+      - name: Install Qt 6.8.3 (MinGW 64-bit) + SerialPort
         run: |
-          # Positional order is host, target, version, arch -- aqt rejects
-          # the version before the host instead of complaining about the
-          # download, so getting this wrong costs one CI round-trip.
-          python -m aqt install-qt --outputdir C:\Qt windows desktop 6.12.0 win64_mingw --modules qtserialport
+          python -m aqt install-qt --outputdir C:\Qt windows desktop 6.8.3 win64_mingw --modules qtserialport
 
       - name: Install MinGW, CMake and Ninja
         run: |
-          python -m aqt install-tool --outputdir C:\Qt windows desktop tools_mingw
+          python -m aqt install-tool --outputdir C:\Qt windows desktop tools_mingw1310 qt.tools.win64_mingw1310
           python -m aqt install-tool --outputdir C:\Qt windows desktop tools_ninja
           python -m aqt install-tool --outputdir C:\Qt windows desktop tools_cmake
 
