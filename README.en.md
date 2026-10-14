@@ -27,9 +27,11 @@ no `%APPDATA%`. Copy the folder to another PC and double-click.
 - **Multi-string sending** — 99 rows, each with its own interval, HEX or text,
   send-one-row, loop send. Optional SSCOM config import migrates an existing
   `sscom51.ini` in one click
-- **Send/receive direction markers** — every line starts with `←` (received) or
-  `→` (sent), ahead of the timestamp when timestamps are on. SSCOM has no such
-  feature: with echo on, sent and received lines are literally indistinguishable
+- **Send/receive colouring** — received lines in **blue**, sent lines in **orange**,
+  with a separate palette for light and dark system themes; the marker sits ahead of
+  the timestamp when timestamps are on. SSCOM has no such feature: with echo on, sent
+  and received lines are literally indistinguishable. Red/green is deliberately avoided
+  — around 8% of men cannot tell that pair apart, and it falsely implies "failed/OK".
 - **Portable delivery** — `package.bat` produces a runnable folder and a zip archive
 
 ## Requirements

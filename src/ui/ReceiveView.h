@@ -6,6 +6,7 @@
 #include <QGroupBox>
 #include <QString>
 
+class DirectionHighlighter;
 class QCheckBox;
 class QComboBox;
 class QPlainTextEdit;
@@ -20,6 +21,12 @@ class ReceiveView : public QGroupBox
 
 public:
     explicit ReceiveView(QWidget* parent = nullptr);
+
+    // 存在意义只有一个：析构里要先摘掉 m_highlighter。
+    // QSyntaxHighlighter 是 document 的 format-change filter，而 document 由
+    // QPlainTextEdit 析构时删除；让它活到 document 之后，removeFormatChangeFilter
+    // 会打在野指针上。
+    ~ReceiveView() override;
 
     void setSerialSource(SerialPortManager* source);
 
@@ -69,6 +76,7 @@ private:
     bool isScrolledToBottom() const;
 
     QPlainTextEdit* m_text          = nullptr;
+    DirectionHighlighter* m_highlighter = nullptr;
     QCheckBox*      m_hexCheck      = nullptr;
     QCheckBox*      m_tsCheck       = nullptr;
     QCheckBox*      m_wrapCheck     = nullptr;

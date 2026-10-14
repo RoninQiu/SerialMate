@@ -1,9 +1,11 @@
 #include "ui/ReceiveView.h"
 
 #include "core/SerialPortManager.h"
+#include "ui/DirectionHighlighter.h"
 #include "ui/WrapLayout.h"
 
 #include <QAction>
+#include <QApplication>
 #include <QCheckBox>
 #include <QComboBox>
 #include <QFont>
@@ -11,6 +13,7 @@
 #include <QHBoxLayout>
 #include <QLabel>
 #include <QMenu>
+#include <QPalette>
 #include <QPlainTextEdit>
 #include <QPoint>
 #include <QPushButton>
@@ -159,6 +162,23 @@ ReceiveView::ReceiveView(QWidget* parent)
         connect(pause, &QAction::toggled, m_pauseCheck, &QCheckBox::setChecked);
         menu.exec(m_text->viewport()->mapToGlobal(pos));
     });
+
+    // 收发方向着色。挂在 document() 上而不是 setSyntaxHighlighter ——
+    // Qt 5 移除了那个便捷方法，但 QPlainTextEdit 仍会渲染高亮器写进
+    // document 的逐字符格式（差分实测与 QTextEdit 一致）。详见
+    // DirectionHighlighter.h。
+    m_highlighter = new DirectionHighlighter(m_text->document());
+
+    // 系统深浅色切换：跟着换一套色。仓库不设调色板，全看系统，
+    // 所以不接这个信号的话，用户开深色模式就会看到深蓝糊在深色底上。
+    connect(qApp, &QGuiApplication::paletteChanged, this,
+            [this](const QPalette&) { m_highlighter->refreshPalette(); });
+}
+
+ReceiveView::~ReceiveView()
+{
+    // 见头文件：必须赶在 QPlainTextEdit 销毁 document 之前摘掉高亮器。
+    delete m_highlighter;
 }
 
 void ReceiveView::setSerialSource(SerialPortManager* source)

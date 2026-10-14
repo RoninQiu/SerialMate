@@ -40,6 +40,8 @@ set(SSCOM_UI_SOURCES
     src/ui/SerialConfigPanel.cpp
     src/ui/ReceiveView.h
     src/ui/ReceiveView.cpp
+    src/ui/DirectionHighlighter.h
+    src/ui/DirectionHighlighter.cpp
     src/ui/SendPanel.h
     src/ui/SendPanel.cpp
     src/ui/MultiSendTable.h
