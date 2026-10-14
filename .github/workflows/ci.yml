@@ -1,0 +1,76 @@
+# SerialMate CI — compile everything, then run the four unit tests.
+#
+# What this is for: a regression gate. Every push to main is built from
+# scratch with the same Qt and the same MinGW that README.md documents as
+# verified, and ctest has to stay green.
+#
+# What this is NOT for: acceptance. Anything that needs real hardware —
+# the COM5 TX-RX loopback, the GUI behaviour, the "copy the folder to
+# another PC" check — cannot run here and stays local.
+#
+# Why aqtinstall and not install-qt-action: aqt reproduces the layout of
+# the Qt online installer, so the kit lands in C:\Qt\<version>\<arch> and
+# the tools in C:\Qt\Tools\{mingw*_64,CMake_64,Ninja} — exactly the places
+# qt-env.bat already probes. That is what lets the step below run plain
+# `build.bat test`: the same script, unchanged, that a developer runs.
+#
+# SerialPort is requested as a module on purpose. It is a separate Qt
+# repository (qt/qtserialport), NOT part of qtbase, so
+# find_package(Qt6 ... COMPONENTS SerialPort) fails without it — and it
+# never fails locally, because a full online install has everything.
+
+name: CI
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+jobs:
+  build-and-test:
+    name: Build + unit tests
+    runs-on: windows-2022
+
+    env:
+      # tst_sscomimporter links Qt6::Gui, so its QTEST_MAIN expands to
+      # QGuiApplication and it needs a platform plugin. The runner does have
+      # a desktop session, but offscreen makes that irrelevant.
+      QT_QPA_PLATFORM: offscreen
+      QTDIR: C:\Qt\6.12.0\win64_mingw
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install aqtinstall
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install aqtinstall
+
+      - name: Install Qt 6.12.0 (MinGW 64-bit) + SerialPort
+        run: |
+          python -m aqt install-qt --outputdir C:\Qt 6.12.0 windows desktop win64_mingw --modules qtserialport
+
+      - name: Install MinGW, CMake and Ninja
+        run: |
+          python -m aqt install-tool --outputdir C:\Qt windows desktop tools_mingw
+          python -m aqt install-tool --outputdir C:\Qt windows desktop tools_ninja
+          python -m aqt install-tool --outputdir C:\Qt windows desktop tools_cmake
+
+      # Cheap to run, and it turns "the build failed" into "these exact
+      # versions are what failed" in one glance instead of three.
+      # EnableDelayedExpansion is mandatory: qt-env.bat reads !QTROOT!, and
+      # cmd expands %VAR% once at parse time inside a block.
+      - name: Show the resolved toolchain
+        shell: cmd
+        run: |
+          setlocal EnableDelayedExpansion
+          call qt-env.bat
+          echo QTROOT  = !QTROOT!
+          "!QTROOT!\bin\qmake.exe" -query QT_VERSION
+          gcc --version
+          cmake --version
+          ninja --version
+
+      - name: Build + unit tests
+        shell: cmd
+        run: build.bat test
