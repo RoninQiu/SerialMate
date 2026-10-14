@@ -48,10 +48,22 @@ void TestTextCodec::latin1_replaces_unmappable()
 
 void TestTextCodec::local_is_system_codepage()
 {
-    const QString src = QStringLiteral("中文");
-    const QByteArray enc = encodeText(src, TextEncoding::Local);
-    // 系统 ANSI 与 UTF-8 不可能恰好一致，且中文 ANSI 编码后比 Latin-1 长
-    QVERIFY(enc != encodeText(src, TextEncoding::Latin1));
+    // Local 必须等于系统 ANSI 码页（实现就是 toLocal8Bit），而不是写死的
+    // Latin-1 —— 这正是本组用例的来由，要钉住的就是它。
+    //
+    // 刻意不写成「中文编码后不等于 Latin-1」：那条只在系统 ANSI 是 CJK 多字节
+    // 码页（CP936）时成立。CP1252 这类单字节西文码页上中文同样变成 '?'，
+    // 与 Latin-1 结果一模一样，于是测试在所有非中文 Windows 上都必挂 ——
+    // 等于把「开发机装的是中文系统」写进了断言，公开仓库的贡献者全都跑不了。
+    const QString src = QStringLiteral("AT+温度");
+    QCOMPARE(encodeText(src, TextEncoding::Local), src.toLocal8Bit());
+
+    // 「€」是把两者分开的探针：CP1252 编成 0x80，Latin-1 只能给 '?'。
+    // Windows 的 ANSI 码页没有一个是 ISO-8859-1 本身，所以它在中文机和英文机
+    // 上都成立 —— 谁把 Local 改回 toLatin1()，在两边都会当场失败。
+    const QString euro = QStringLiteral("€");
+    QCOMPARE(encodeText(euro, TextEncoding::Local), euro.toLocal8Bit());
+    QVERIFY(encodeText(euro, TextEncoding::Local) != QByteArray("?"));
 }
 
 void TestTextCodec::latin1_decode_is_lossless()
