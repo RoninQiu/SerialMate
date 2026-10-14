@@ -3,8 +3,7 @@
 [简体中文](README.md) | **English**
 
 A serial-port debugging assistant written in Qt 6. It follows the working habits of
-SSCOM 5.13.1 and adds several things the original is missing.
-**Independent implementation**, unrelated to SSCOM or its authors.
+SSCOM 5.13.1.
 
 ![Main window](images/screenshot.png)
 
@@ -173,6 +172,3 @@ or other assets from SSCOM or its authors were used. SSCOM is mentioned for two
 reasons only: to describe the use case this tool targets, and to provide an
 **optional** config import that parses the INI text on the user's own machine and
 contains nothing from the original, so nobody has to retype 99 rows.
-
-SSCOM and its name and icons belong to their authors and are unrelated to this
-project. This project has no affiliation with or endorsement from the SSCOM authors.
