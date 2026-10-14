@@ -1,0 +1,73 @@
+# 构建目录
+build/
+cmake-build-*/
+out/
+
+# 打包产物（package.bat 生成的可运行目录，含 Qt 运行库 DLL）
+dist/
+
+# CMake 产物
+CMakeCache.txt
+CMakeFiles/
+cmake_install.cmake
+CTestTestfile.cmake
+install_manifest.txt
+compile_commands.json
+
+# Qt 生成的中间文件
+*.moc
+moc_*.cpp
+moc_*.h
+qrc_*.cpp
+ui_*.h
+*.qmlc
+*.jsc
+*.ui.qmlc
+
+# Qt Creator / VS 用户文件
+*.user
+*.autosave
+CMakeLists.txt.user*
+.vs/
+.vscode/
+
+# 编译产物
+*.obj
+*.o
+*.lib
+*.a
+*.exp
+*.pdb
+*.ilk
+*.idb
+*.exe
+*.dll
+*.res
+
+# 日志与临时文件
+*.log
+*.tmp
+*.bak
+*~
+
+# 系统文件
+Thumbs.db
+.DS_Store
+desktop.ini
+
+# SSCOM 原版程序与其自动生成的配置文件（第三方内容，仅本地作参考）
+# 把它的 ini 收进仓库等于把第三方二进制与用户私有配置一起公开。
+# import 的黄金用例在文件缺失时 QSKIP 跳过，逻辑本身另有自造的
+# GBK 用例覆盖，不依赖这份文件。
+ref/sscom5.13.1/
+ref/sscom*/
+
+# 内部工作文档 —— 不随仓库发布。
+#
+# development-log.md 是开发过程的完整决策与踩坑流水；HANDOFF.md 面向接手者；
+# plans/specs 是实现计划。这些记录的是「怎么做出来的」，而仓库只需要 README
+# 说明「这个软件是什么」。留在这里是为了防止误提交。
+# 这类协作痕迹）；HANDOFF.md 面向接手者；plans/specs 是实现计划。
+# 这些记录的是**怎么做出来的**，而公开仓库只需要 README 说明**这个软件是什么**。
+docs/
+HANDOFF.md
