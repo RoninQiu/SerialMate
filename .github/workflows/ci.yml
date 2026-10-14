@@ -48,7 +48,10 @@ jobs:
 
       - name: Install Qt 6.12.0 (MinGW 64-bit) + SerialPort
         run: |
-          python -m aqt install-qt --outputdir C:\Qt 6.12.0 windows desktop win64_mingw --modules qtserialport
+          # Positional order is host, target, version, arch -- aqt rejects
+          # the version before the host instead of complaining about the
+          # download, so getting this wrong costs one CI round-trip.
+          python -m aqt install-qt --outputdir C:\Qt windows desktop 6.12.0 win64_mingw --modules qtserialport
 
       - name: Install MinGW, CMake and Ninja
         run: |
