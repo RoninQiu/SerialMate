@@ -50,6 +50,7 @@ private:
     void showUsage();
     void importFromSscom();
     void warnIfConfigNotWritable();
+    void warnAboutUnreadableConfig(const QString& reason);
 
     SerialConfigPanel*   m_serialPanel = nullptr;
     ReceiveView*         m_recvView    = nullptr;
@@ -77,4 +78,10 @@ private:
     // SerialPortManager 跑在工作线程且没有 isOpen() 查询口，跨线程问它不安全，
     // 所以 UI 侧自己记一份 —— 发送路径必须靠它才能保证"没发出去的不计数、不回显"。
     bool    m_portOpen  = false;
+
+    // 本次启动读配置时是否出了错（文件损坏、格式不对）。
+    // 为真时 closeEvent **不把配置写回去**：读回来的那份是默认值，写回去等于
+    // 用默认值永久覆盖掉用户原来的文件 —— 而原文件坏在哪、能不能手工救回来，
+    // 正是排查问题需要的线索。代价只是本次会话的窗口布局存不下来。
+    bool    m_configReadError = false;
 };

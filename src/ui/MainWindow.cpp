@@ -50,13 +50,31 @@ MainWindow::MainWindow(QWidget* parent)
     startSerialThread();
     wireSignals();
 
-    applyConfig(ConfigManager::load());
+    QString loadErr;
+    applyConfig(ConfigManager::loadChecked(&loadErr));
     updateStatusCounters();
+
+    // 配置读坏了必须在启动就讲清楚：等用户配完参数、关程序时才发现存不上，
+    // 前面全白做；更糟的是此刻配置已经被换成默认值，退出时还会被原样写回去。
+    m_configReadError = !loadErr.isEmpty();
+    if (m_configReadError)
+        warnAboutUnreadableConfig(loadErr);
 
     // 绿色软件的代价：配置就写在 exe 旁边。程序被放进 Program Files 而当前
     // 用户无写权限时，参数根本存不下来。必须在启动就讲清楚 —— 等用户配完
     // 一堆参数、关程序时才发现没存上，前面全白做。
     warnIfConfigNotWritable();
+}
+
+void MainWindow::warnAboutUnreadableConfig(const QString& reason)
+{
+    statusBar()->showMessage(tr("⚠ 配置读取异常，本次不保存"), 0);
+    QMessageBox::warning(this, tr("配置读取异常"), tr(
+        "SerialMate.ini 没能正常读取，已按默认值继续运行。\n\n"
+        "原因：%1\n\n"
+        "**退出时不会把这份默认值写回该文件** —— 原文件里可能有能手工救回来的"
+        "内容，覆盖掉就找不回来了。可以先把它改名备份，再重新启动本程序。")
+        .arg(reason));
 }
 
 void MainWindow::warnIfConfigNotWritable()
@@ -647,7 +665,11 @@ void MainWindow::closeEvent(QCloseEvent* event)
     m_recvView->stopFlush();
 
     QString saveErr;
-    if (!ConfigManager::saveChecked(collectConfig(), &saveErr)) {
+    if (m_configReadError) {
+        // 见 m_configReadError 的注释：读回来的那份是默认值，写回去等于永久
+        // 覆盖掉用户原来那个坏掉的文件。宁可这次会话的布局存不下来。
+        statusBar()->showMessage(tr("⚠ 配置读取异常，本次不保存"), 0);
+    } else if (!ConfigManager::saveChecked(collectConfig(), &saveErr)) {
         // 走到这里说明启动时的探测漏了（磁盘满、目录权限被改、U 盘拔出）。
         // 照实报出来，别让用户以为参数存下了。
         QMessageBox::warning(this, tr("配置保存失败"), saveErr);

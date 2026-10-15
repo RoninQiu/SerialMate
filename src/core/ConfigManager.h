@@ -25,6 +25,13 @@ public:
     static bool checkWritable(QString* error);
 
     static AppConfig load();
+    // 同 load()，但把「文件读坏了」这件事报出来。
+    //
+    // QSettings 的读取是惰性的，读不出来时每条 value() 都静默返回默认值，
+    // 不检查 status() 的话 load() 永远只会返回一份全新的默认配置：用户那份
+    // 99 条、发送草稿、窗口布局全部"消失"，而退出时 MainWindow 又会把这份
+    // 默认值原样写回 —— 损坏的文件被永久覆盖，且全程没有任何提示。
+    static AppConfig loadChecked(QString* error);
     static void save(const AppConfig& cfg);
 
     // 返回是否落盘成功。失败时（目录只读、磁盘满）error 带上原因。

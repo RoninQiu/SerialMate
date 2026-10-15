@@ -51,6 +51,10 @@ private slots:
     void save_stamps_layout_version();
     void missing_layout_version_reads_as_zero();
 
+    // ---- 配置读坏了必须报出来 ----
+    void corrupt_file_is_reported_by_load_checked();
+    void healthy_file_reports_no_error();
+
     // ---- 绿色软件契约 ----
     void config_file_lives_next_to_the_exe();
     void save_checked_reports_success_on_a_writable_dir();
@@ -515,6 +519,44 @@ void TestConfigManager::missing_layout_version_reads_as_zero()
     // MainWindow 会跳过 state 恢复。若这里回落到 kLayoutVersion，
     // 旧 blob 就会被套到新控件树上，面板会恢复成错的样子而且不报错。
     QCOMPARE(ConfigManager::load().layoutVersion, 0);
+}
+
+// ---- 配置读坏了必须报出来 ----
+
+void TestConfigManager::corrupt_file_is_reported_by_load_checked()
+{
+    // 评审发现的缺陷：load() 全程不看 status()，QSettings 遇到 FormatError 时
+    // 每条 value() 都静默返回默认值，读回来是一份全新的默认配置。用户那份
+    // 99 条、发送草稿、窗口布局全部"消失"，而退出时 MainWindow 又把这份
+    // 默认值原样写回去 —— 损坏的文件连同里面能抢救的内容一起没了。
+    QFile f(ConfigManager::configFilePath());
+    QVERIFY(f.open(QIODevice::WriteOnly));
+    f.write("<<< 不是 ini >>>\n[[[坏掉的键没有等号\n另一个坏的\n");
+    f.close();
+
+    QString err;
+    const AppConfig cfg = ConfigManager::loadChecked(&err);
+
+    QVERIFY2(!err.isEmpty(), "配置文件读坏了却一个字都没报");
+    // 坏文件仍要给出一份可用的默认值，程序要能起来，不能崩在读配置这一步
+    QCOMPARE(cfg.sendItems.size(), kSendItemCount);
+}
+
+void TestConfigManager::healthy_file_reports_no_error()
+{
+    // 反过来也必须成立：正常配置不能误报，否则 MainWindow 会一直提示"读坏了"
+    // 并且永远不保存配置。
+    QVERIFY(ConfigManager::saveChecked(populated(), nullptr));
+
+    QString err;
+    ConfigManager::loadChecked(&err);
+    QVERIFY2(err.isEmpty(), qPrintable(QStringLiteral("正常配置被误报为损坏：%1").arg(err)));
+
+    // 也没有配置文件（全新机器）时，同样不该报错
+    QFile::remove(ConfigManager::configFilePath());
+    err.clear();
+    ConfigManager::loadChecked(&err);
+    QVERIFY2(err.isEmpty(), qPrintable(QStringLiteral("没有配置文件被误报：%1").arg(err)));
 }
 
 // ---- 绿色软件契约 ----

@@ -160,6 +160,11 @@ bool ConfigManager::checkWritable(QString* error)
 
 AppConfig ConfigManager::load()
 {
+    return loadChecked(nullptr);
+}
+
+AppConfig ConfigManager::loadChecked(QString* error)
+{
     QSettings s = openSettings();
     AppConfig cfg;
 
@@ -229,6 +234,13 @@ AppConfig ConfigManager::load()
     // 按"结构不匹配"处理，MainWindow 会跳过 state 恢复。写成 kLayoutVersion 会
     // 把老配置当成新结构，反而把面板恢复成错的样子。
     cfg.layoutVersion = s.value(QStringLiteral("window/layoutVersion"), 0).toInt();
+
+    // 读完才看 status()：QSettings 的读取是惰性的，只有真读完了才知道文件坏没坏。
+    // 上面每一条 value() 在 FormatError 时都拿不到值，读回来是一份全新的默认
+    // 配置 —— 此刻不报出去，调用方会以为"用户就是默认值"，退出时再把这份默认值
+    // 写回去，损坏的文件连同里面能抢救的内容一起没了。
+    if (s.status() != QSettings::NoError && error)
+        *error = describeStatus(s.status());
 
     return cfg;
 }
