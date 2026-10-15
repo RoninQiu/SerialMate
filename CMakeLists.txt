@@ -125,3 +125,17 @@ target_include_directories(tst_sscomimporter PRIVATE src)
 # 字体映射（N1088/N1089 -> recv/font）要用它。漏链会报 "No such file or directory: QFont"
 target_link_libraries(tst_sscomimporter PRIVATE Qt6::Test Qt6::SerialPort Qt6::Gui)
 add_test(NAME sscomimporter COMMAND tst_sscomimporter)
+
+qt_add_executable(tst_configmanager
+    tests/tst_configmanager.cpp
+    src/core/ConfigManager.h
+    src/core/ConfigManager.cpp
+    # ConfigManager 通过 AppConfigTypes.h 引入 TextCodec.h，缺它会 undefined reference
+    src/core/TextCodec.h
+    src/core/TextCodec.cpp
+)
+target_include_directories(tst_configmanager PRIVATE src)
+# AppConfigTypes.h -> models.h -> <QSerialPort>，所以要 SerialPort 的头文件路径。
+# 不需要 QtGui：这个测试走 QTEST_MAIN 的 QCoreApplication 分支，不碰 QFont。
+target_link_libraries(tst_configmanager PRIVATE Qt6::Test Qt6::SerialPort)
+add_test(NAME configmanager COMMAND tst_configmanager)
