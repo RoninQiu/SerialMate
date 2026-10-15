@@ -2,6 +2,7 @@
 
 #include "core/AppConfigTypes.h"   // kDefaultReceiveLimit
 #include "core/DataFormatter.h"
+#include "ui/ReceiveBacklog.h"     // 暂停期间的数据暂存，见该文件头注释
 
 #include <QGroupBox>
 #include <QString>
@@ -70,9 +71,11 @@ signals:
 
 private slots:
     void onFlush();
+    void onPauseToggled(bool on);
 
 private:
     void appendText(const QString& text);
+    void appendIncoming(const QByteArray& data);
     void enforceBufferLimit();
     bool isScrolledToBottom() const;
 
@@ -98,6 +101,11 @@ private:
     // 换编码、切 HEX、清空、暂停丢弃数据时都必须清掉，否则旧的尾巴会粘到
     // 不相干的数据上，凭空多出一个错字。
     QByteArray      m_partial;
+
+    // 暂停期间攒下的原始字节，恢复显示时补刷进去。必须有上限：攒在这里
+    // 与攒在工作线程里同样会 OOM，而"暂停时定时器不能停"正是为了避免后者。
+    // 超出上限丢最早的并记账，恢复时如实告诉用户。
+    ReceiveBacklog  m_paused;
 
     SerialPortManager* m_source      = nullptr;
 };

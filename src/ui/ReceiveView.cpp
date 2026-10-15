@@ -3,6 +3,7 @@
 #include "core/SerialPortManager.h"
 #include "core/TextCodec.h"
 #include "ui/DirectionHighlighter.h"
+#include "ui/ReceiveBacklog.h"
 #include "ui/WrapLayout.h"
 
 #include <QAction>
@@ -161,6 +162,9 @@ ReceiveView::ReceiveView(QWidget* parent)
         m_partial.clear();
     });
 
+    // 恢复显示时把暂停期间攒下的数据补刷进去。
+    connect(m_pauseCheck, &QCheckBox::toggled, this, &ReceiveView::onPauseToggled);
+
     // FR-02-10 右键菜单：复制 / 清空 / 保存 / 暂停
     m_text->setContextMenuPolicy(Qt::CustomContextMenu);
     connect(m_text, &QWidget::customContextMenuRequested, this, [this](const QPoint& pos) {
@@ -249,11 +253,18 @@ void ReceiveView::onFlush()
     emit chunkReceived(static_cast<int>(data.size()));
 
     if (isPaused()) {
-        // 暂停期间这批数据不显示，残留的半个字符也一并丢掉：恢复后接上来的是
-        // 全新的数据，把旧尾巴拼上去只会凭空多一个错字。
-        m_partial.clear();
+        // 不能直接丢：这批数据已经从工作线程取走了。攒起来，恢复时补刷。
+        m_paused.append(data);
         return;
     }
+
+    appendIncoming(data);
+}
+
+void ReceiveView::appendIncoming(const QByteArray& data)
+{
+    if (data.isEmpty())
+        return;
 
     // 方向标记 ← ：设备 -> 本机。与发送那条是**两次独立 append**（这里是 40ms
     // 定时器，发送那边是 sendCompleted 信号），所以一批数据里不会混着两种方向，
@@ -274,6 +285,25 @@ void ReceiveView::onFlush()
     }
 
     appendText(DataFormatter::formatChunk(payload, opt));
+}
+
+void ReceiveView::onPauseToggled(bool on)
+{
+    if (on) {
+        // 暂停期间的数据是原样攒着的、不参与解码，所以此时残留的半个字符
+        // 再接回新数据只会凭空多一个错字。
+        m_partial.clear();
+        return;
+    }
+
+    QByteArray buffered;
+    qint64 dropped = 0;
+    m_paused.take(&buffered, &dropped);
+
+    if (!buffered.isEmpty())
+        appendIncoming(buffered);
+    if (dropped > 0)
+        appendText(tr("\n（暂停期间超出暂存上限，丢弃了最早的 %1 字节）").arg(dropped));
 }
 
 void ReceiveView::appendSent(const QByteArray& data)
@@ -367,6 +397,9 @@ void ReceiveView::clearText()
     m_text->clear();
     // 屏幕已经清空，残留的半个字符再接回新数据只会凭空多一个错字。
     m_partial.clear();
+    // 暂停期间攒的那批也一并丢掉：用户按"清空"就是想从干净状态重新开始，
+    // 恢复时再倒出一大段数据会让人以为程序出了故障。
+    m_paused.clear();
 }
 
 void ReceiveView::stopFlush()

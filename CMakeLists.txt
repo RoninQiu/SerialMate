@@ -175,3 +175,12 @@ target_include_directories(tst_serialportmanager PRIVATE src)
 # models.h -> <QSerialPort>。不需要 Widgets：这里只测不需要真实串口的那部分契约。
 target_link_libraries(tst_serialportmanager PRIVATE Qt6::Test Qt6::SerialPort)
 add_test(NAME serialportmanager COMMAND tst_serialportmanager)
+
+qt_add_executable(tst_receivebacklog
+    tests/tst_receivebacklog.cpp
+    src/ui/ReceiveBacklog.h
+)
+target_include_directories(tst_receivebacklog PRIVATE src)
+# 纯逻辑，头文件即实现，不需要 Widgets —— 界面的接线由 ReceiveView 自己负责。
+target_link_libraries(tst_receivebacklog PRIVATE Qt6::Test)
+add_test(NAME receivebacklog COMMAND tst_receivebacklog)

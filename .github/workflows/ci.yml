@@ -1,4 +1,4 @@
-# SerialMate CI — compile everything, then run the seven unit tests.
+# SerialMate CI — compile everything, then run the eight unit tests.
 #
 # What this is for: a regression gate. Every push to main is built from
 # scratch and ctest has to stay green.
