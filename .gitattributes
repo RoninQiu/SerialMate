@@ -1,0 +1,32 @@
+# 换行符策略 —— 从 core.autocrlf 接手，按文件类型定死。
+#
+# 为什么需要这个文件：core.autocrlf = true 不是本仓库的设置，而是**安装的那套
+# Git 自带的系统级配置**里的（Windows 上通常是 <git>/etc/gitconfig，
+# Scoop 版在 E:/ScoopApps/.../etc/gitconfig）。本仓库原先没有 .gitattributes，
+# git 无处可问「这个文件该用什么换行符」，只能退回 core.autocrlf —— 它的含义
+# 是「Windows 上把所有文本文件检出成 CRLF」。两个后果：
+#
+#   1. 同一份源码在不同机器上不一致（有人 LF、有人 CRLF），整文件 diff 会把
+#      真正的逻辑改动淹没，review 时全是噪声；
+#   2. 反过来，在 core.autocrlf 默认 false 的机器（Linux / WSL）上，
+#      build.bat / package.bat / qt-env.bat 会变成 LF，而 cmd.exe 解析
+#      LF-only 的批处理在 goto、括号块、延迟展开这些地方有已知的解析错误。
+#
+# 本文件的优先级高于 core.autocrlf。生效后不再看操作系统，只看文件类型。
+# 判定生效与否：git ls-files --eol -- <文件>，attr/ 列非空即已应用。
+
+# 文本一律以 LF 存取，检出到工作区也是 LF。
+# text=auto 让 git 按内容嗅探二进制，二进制文件不受本条影响。
+* text=auto eol=lf
+
+# 批处理必须 CRLF。上面那条会把它们也压成 LF，这里单独改回来。
+*.bat text eol=crlf
+*.cmd text eol=crlf
+
+# 显式标出二进制。text=auto 嗅探万一失手时，这里是最后一道保险。
+*.png binary
+*.jpg binary
+*.jpeg binary
+*.gif binary
+*.ico binary
+*.zip binary
