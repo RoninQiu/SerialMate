@@ -270,6 +270,27 @@ void MainWindow::buildShortcuts()
 
 void MainWindow::openSerial()
 {
+    // 串口已经开着时必须直接返回，不能去 trigger() 那个菜单项。
+    //
+    // 缺陷原委：m_openAction 只在 closed() 里恢复 setVisible(true)，
+    // 而 **QAction::trigger() 不看 isVisible()** —— 菜单里点不到的那一项，
+    // 快捷键照样触发得到。于是串口开着时按 Ctrl+O：
+    //   invokeMethod(openPort) → openPort 里 `if (m_open) closePort();`
+    //   → closed() → MainWindow 在里面 stop 循环发送、stopSending 定时发送、
+    //     stopLoop、关日志文件；
+    //   → 紧接着又把同一个端口开了回来。
+    // 端口毫发无损，循环和定时发送却被静默拆掉，界面上"什么都没发生"。
+    //
+    // 为什么不能只靠 m_openAction->setEnabled(false)：那依赖 QAction::activate
+    // 的内部实现细节。这里自己判一次，行为写在明面上。
+    //
+    // 也挡不住全部：m_portOpen 由 opened()/closed() 两个**队列连接**维护，
+    // 端口真正打开到信号投递之间有一个窗口，窗口里按 Ctrl+O 仍会走到
+    // openPort —— 那一瞬由 SerialPortManager::openPort 的重入拒绝兜底。
+    if (m_portOpen) {
+        statusBar()->showMessage(tr("串口已打开，无需重复打开"), 3000);
+        return;
+    }
     m_openAction->trigger();
 }
 
@@ -330,6 +351,10 @@ void MainWindow::startSerialThread()
                     m_openAction->setVisible(false);
                 if (m_closeAction)
                     m_closeAction->setVisible(true);
+                // 开着口时"打开"不再有意义。setVisible 只是不显示，
+                // 而快捷键走的是 trigger()，那条路不看可见性 —— 所以还得禁用。
+                if (m_openAction)
+                    m_openAction->setEnabled(false);
                 m_statusConn->setText(tr("串口已打开：%1").arg(name));
                 m_portOpen = true;
                 // 串口没开时发送控件是禁用的，这里放开。
@@ -347,6 +372,8 @@ void MainWindow::startSerialThread()
             m_openAction->setVisible(true);
         if (m_closeAction)
             m_closeAction->setVisible(false);
+        if (m_openAction)
+            m_openAction->setEnabled(true);
         m_statusConn->setText(tr("串口已关闭"));
         m_portOpen = false;
         // 发送控件一并禁用：SSCOM 也是这么做的，且能彻底堵死"串口没开却点了发送"
@@ -414,6 +441,7 @@ void MainWindow::wireSignals()
         else
             m_queue->stop();
     });
+    // (itemsEdited 连线属于下一个提交，暂不在此)
     // 循环发送的节奏改由每行自己的「间隔」列决定，队列不再接受全局间隔，
     // 所以这里没有 loopIntervalChanged -> setInterval 这条连线了。
     // 「全部间隔」输入框只是「应用到全部」的来源，改它不必通知队列。

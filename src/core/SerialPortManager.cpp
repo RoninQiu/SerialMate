@@ -43,8 +43,22 @@ void SerialPortManager::openPort(const SerialConfig& cfg)
         emit errorOccurred(tr("串口尚未初始化"));
         return;
     }
-    if (m_open)
-        closePort();
+    if (m_open) {
+        // 重入即拒绝，不做「先关再开」。
+        //
+        // 原先是 closePort() 然后往下走重开。代价出在 closePort() 会 emit closed()，
+        // 而 MainWindow 的 closed 槽正在里面停循环发送、停定时发送、关日志文件 ——
+        // 调用方只是想打开一个已经开着的端口，这些却全被静默拆了，
+        // 紧接着端口又完好无损地开回来，全程没有任何提示。
+        //
+        // 这条是防御的最里层，不依赖调用方自觉：MainWindow 那边已经挡住了
+        // 菜单与 Ctrl+O，但将来多一个调用点时不必重新踩一遍。
+        //
+        // 不影响拔线后重开：拔线走的是 onPortErrorOccurred → closePort()，
+        // 那条路先 closePort() 置 m_open=false，之后用户再点打开才是干净的打开。
+        emit errorOccurred(tr("串口 %1 已经打开").arg(m_port->portName()));
+        return;
+    }
 
     m_port->setPortName(cfg.portName);
     m_port->setBaudRate(cfg.baudRate);
