@@ -62,4 +62,37 @@ struct AppConfig
     QByteArray      geometry;               // saveGeometry() 结果
     QByteArray      state;                  // saveState() 结果，仅当 layoutVersion 匹配时才可用
     int             layoutVersion   = 0;    // 读到 0 表示这份配置来自无版本号的老版本
+
+    // 缺这个键的老配置一律读成 System —— 那正是加这一项之前的实际行为，
+    // 升级不该让用户的界面凭空变样。
+    Theme           theme           = Theme::System;
 };
+
+// 枚举 <-> ini 字符串。放数据层而不是 Theme.h：ConfigManager 属于 core，
+// 而 Theme.h 会拉进 QApplication/QWidget（core 不该依赖 Widgets）。
+//
+// 认不出的值一律当 System。不猜：猜错就是用户的界面无缘无故变样，
+// 而 System 至少是加这一项之前的实际行为。ini 是给人手改的，
+// 这里必须假设自己会被改坏。
+inline Theme themeFromString(const QString& value)
+{
+    const QString v = value.trimmed().toLower();
+    if (v == QLatin1String("light"))
+        return Theme::Light;
+    if (v == QLatin1String("dark"))
+        return Theme::Dark;
+    return Theme::System;
+}
+
+inline QString themeToString(Theme theme)
+{
+    switch (theme) {
+    case Theme::Light:
+        return QStringLiteral("light");
+    case Theme::Dark:
+        return QStringLiteral("dark");
+    case Theme::System:
+        break;
+    }
+    return QStringLiteral("system");
+}

@@ -1,4 +1,6 @@
 #include "ui/MultiSendTable.h"
+#include "ui/OutgoingAccent.h"
+#include "ui/Theme.h"
 
 // kSendItemCount 定义在这里（MultiSendTable.h 只 include models.h，
 // 是刻意不让 UI 层头文件把 AppConfig 拖进来）。
@@ -77,6 +79,10 @@ private slots:
     // 竞态：单发的余晖到期时，循环可能已经把指示挪到别的行了。
     // 无差别清会把正在发送的指示一起擦掉。
     void fading_single_send_does_not_erase_a_newer_highlight();
+    // 换主题后高亮行必须重画。底色是 setCurrentRow 那一刻写进 item 的，
+    // 调色板换了不会回头重取 —— 实测切深色后仍是一条浅米色的带。
+    void palette_change_repaints_the_highlighted_row();
+    void palette_change_without_a_highlight_does_nothing();
 
 private:
     static QTableWidget* tableOf(MultiSendTable& m);
@@ -741,6 +747,48 @@ void TestMultiSendTable::fading_single_send_does_not_erase_a_newer_highlight()
 
     QCOMPARE(t->item(9, 0)->background().style(), Qt::SolidPattern);
     QCOMPARE(t->item(2, 0)->background().style(), Qt::NoBrush);
+}
+
+void TestMultiSendTable::palette_change_repaints_the_highlighted_row()
+{
+    // 这条钉的是实测出来的破相：底色写进了 QTableWidgetItem，
+    // 调色板换了不会回头重取，切到深色后高亮行仍是一条浅米色的带。
+    MultiSendTable m;
+    QTableWidget* t = tableOf(m);
+    static const int kIndexCol = 0;
+
+    applyTheme(Theme::Light);
+    m.setCurrentRow(6);
+    const QColor lightBg = t->item(6, kIndexCol)->background().color();
+
+    applyTheme(Theme::Dark);
+    const QColor darkBg = t->item(6, kIndexCol)->background().color();
+
+    // 必须真的换掉了 —— 若只是 setPalette 而没重画，这里会是同一个颜色
+    QVERIFY(lightBg != darkBg);
+    QCOMPARE(darkBg, outgoingAccent().soft);
+    QVERIFY(t->item(6, 1)->foreground().color() == outgoingAccent().text);
+    QVERIFY(t->item(6, 1)->font().bold());   // 加粗也在重画范围内，别丢
+
+    applyTheme(Theme::System);   // 别把全局状态留给后面的用例
+}
+
+void TestMultiSendTable::palette_change_without_a_highlight_does_nothing()
+{
+    MultiSendTable m;
+    QTableWidget* t = tableOf(m);
+    static const int kIndexCol = 0;
+
+    applyTheme(Theme::Light);
+    const QBrush before = t->item(6, kIndexCol)->background();
+
+    applyTheme(Theme::Dark);
+
+    // 没有当前行就不该有任何格子被染色
+    QCOMPARE(t->item(6, kIndexCol)->background().style(), before.style());
+    QCOMPARE(t->item(6, kIndexCol)->background().color(), before.color());
+
+    applyTheme(Theme::System);
 }
 
 QTEST_MAIN(TestMultiSendTable)

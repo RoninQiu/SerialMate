@@ -4,6 +4,18 @@
 #include <QSerialPort>
 #include <QString>
 
+// 界面主题。放这里而不是 AppConfigTypes.h：AppConfig 要用它，
+// 而 UI 层的 Theme.h 也要用它，models.h 是两边共同的基础且不带 GUI 依赖。
+//
+// System 是默认值，含义是"Windows 设成什么样就什么样" —— 这也是本程序
+// 早先的行为，加这一档是为了不改动现有用户看到的东西。
+enum class Theme
+{
+    System,
+    Light,
+    Dark,
+};
+
 // 单条多字符串发送完成后的默认等待。与 SSCOM 5.13.1 一致 ——
 // 它 sscom51.ini 的 N1xx 第三段默认写 1000。
 //

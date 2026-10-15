@@ -1,8 +1,8 @@
 #pragma once
 
-#include <QApplication>
+#include "ui/Theme.h"
+
 #include <QColor>
-#include <QPalette>
 
 // 「本机发出的东西」这个语义色的**唯一出处**。
 //
@@ -21,11 +21,14 @@ struct OutgoingAccent
     QColor soft;   // 整行底色用的淡橙
 };
 
-// 应用不设任何样式表，完全跟随系统调色板，所以深浅两套都要取。
-// 用 Base 而不是 Window 判断底色：表格和接收区都是编辑区，底色取自 Base 角色。
+// 深浅判定走 themeIsDark() 而不是"看 Base 亮不亮"：用户可以强制浅色
+// 或强制深色，这时它俩可能指向不同答案，菜单勾了什么就该是什么。
+//
+// 注意它**不能**替代"高亮行重画"：颜色是取到了，但已经写进单元格的旧颜色
+// 不会自己变，MultiSendTable 里那��� paletteChanged 重画是另一件事。
 inline OutgoingAccent outgoingAccent()
 {
-    const bool dark = QApplication::palette().color(QPalette::Base).lightness() < 128;
-    return dark ? OutgoingAccent{ QColor(0xFF, 0xB7, 0x4D), QColor(0x3B, 0x2A, 0x14) }
-                : OutgoingAccent{ QColor(0xA3, 0x4A, 0x00), QColor(0xFC, 0xEB, 0xD9) };
+    return themeIsDark(currentTheme())
+             ? OutgoingAccent{ QColor(0xFF, 0xB7, 0x4D), QColor(0x3B, 0x2A, 0x14) }
+             : OutgoingAccent{ QColor(0xA3, 0x4A, 0x00), QColor(0xFC, 0xEB, 0xD9) };
 }

@@ -4,6 +4,7 @@
 #include "core/DataFormatter.h"
 #include "ui/OutgoingAccent.h"
 
+#include <QApplication>
 #include <QCheckBox>
 #include <QEvent>
 #include <QFontMetrics>
@@ -163,6 +164,16 @@ MultiSendTable::MultiSendTable(QWidget* parent)
     m_table->setColumnWidth(ColInterval, 68);
     m_table->setColumnWidth(ColSend, 56);
     m_table->setSelectionMode(QAbstractItemView::NoSelection);
+    // 换主题时高亮行必须重画。底色是 setCurrentRow 那一刻写进
+    // QTableWidgetItem 的，调色板换了它不会回头重取 —— 实测：切到深色后
+    // 「当前发送行」仍是一条浅米色的带，在深色表里像画错了。
+    connect(qApp, &QApplication::paletteChanged, this, [this] {
+        if (m_currentRow < 0)
+            return;
+        const QSignalBlocker blocker(m_table);
+        paintRow(m_currentRow, false);
+        paintRow(m_currentRow, true);
+    });
     m_table->setEditTriggers(QAbstractItemView::DoubleClicked
                              | QAbstractItemView::SelectedClicked
                              | QAbstractItemView::EditKeyPressed);

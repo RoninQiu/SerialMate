@@ -11,8 +11,10 @@
 #include "ui/ReceiveView.h"
 #include "ui/SendPanel.h"
 #include "ui/SerialConfigPanel.h"
+#include "ui/Theme.h"
 
 #include <QAction>
+#include <QActionGroup>
 #include <QCheckBox>
 #include <QCloseEvent>
 #include <QCoreApplication>
@@ -30,6 +32,25 @@
 #include <QStatusBar>
 #include <QThread>
 #include <QVBoxLayout>
+
+namespace {
+
+// 主题菜单项的文字。放这里而不是 Theme.h：这是纯界面文案，
+// 不该和调色板逻辑混在一个头里。
+QString themeDisplayName(Theme t)
+{
+    switch (t) {
+    case Theme::Light:
+        return QCoreApplication::translate("MainWindow", "浅色(&L)");
+    case Theme::Dark:
+        return QCoreApplication::translate("MainWindow", "深色(&D)");
+    case Theme::System:
+        break;
+    }
+    return QCoreApplication::translate("MainWindow", "跟随系统(&S)");
+}
+
+} // namespace
 
 MainWindow::MainWindow(QWidget* parent)
     : QMainWindow(parent)
@@ -233,6 +254,21 @@ void MainWindow::buildMenus()
     connect(m_multiTableAction, &QAction::toggled, this, [this](bool on) {
         m_multiTable->setVisible(on);
     });
+    viewMenu->addSeparator();
+
+    // 主题。三选一，用 QActionGroup 做互斥。
+    //
+    // 走"视图"而不是"操作"：主题是外观设置，不碰数据也不碰串口。
+    QMenu* themeMenu = viewMenu->addMenu(tr("主题(&T)"));
+    m_themeGroup = new QActionGroup(this);
+    m_themeGroup->setExclusive(true);
+    for (Theme t : { Theme::System, Theme::Light, Theme::Dark }) {
+        QAction* a = themeMenu->addAction(themeDisplayName(t));
+        a->setCheckable(true);
+        a->setData(int(t));
+        m_themeGroup->addAction(a);
+        connect(a, &QAction::triggered, this, [this, t] { setTheme(t); });
+    }
     viewMenu->addSeparator();
     viewMenu->addAction(tr("全部恢复默认布局(&R)"), this, [this] {
         // 恢复不了可见性就等于没恢复，所以显隐状态必须一起还原
@@ -631,6 +667,8 @@ void MainWindow::importFromSscom()
 
 void MainWindow::applyConfig(const AppConfig& cfg)
 {
+    applyThemeToUi(cfg.theme);
+
     m_serialPanel->setConfig(cfg.serial);
     updateStatusParams();
 
@@ -673,6 +711,34 @@ if (!cfg.state.isEmpty() && cfg.layoutVersion == kLayoutVersion) {
 }
 }
 
+void MainWindow::setTheme(Theme theme)
+{
+    applyThemeToUi(theme);
+
+    // 立刻落盘。主题是用户在菜单里明确点的一项，等退出时才存的话，
+    // 中途崩了就白点了 —— 而且用户看不出为什么重启后主题又回去了。
+    QString saveErr;
+    if (!ConfigManager::saveChecked(collectConfig(), &saveErr))
+        QMessageBox::warning(this, tr("主题保存失败"), saveErr);
+}
+
+void MainWindow::applyThemeToUi(Theme theme)
+{
+    m_theme = theme;
+    applyTheme(theme);
+
+    // 菜单勾选跟着走。启动时读配置走的就是这条，没有它用户会看到
+    // 「界面是深色的，菜单里却勾着跟随系统」。
+    if (!m_themeGroup)
+        return;
+    for (QAction* a : m_themeGroup->actions()) {
+        if (a->data().toInt() == int(theme)) {
+            a->setChecked(true);
+            return;
+        }
+    }
+}
+
 AppConfig MainWindow::collectConfig() const
 {
     AppConfig cfg;
@@ -697,6 +763,7 @@ AppConfig MainWindow::collectConfig() const
     cfg.recvEncoding  = opts.encoding;        // displayOptions() 直接带出下拉当前值
     cfg.geometry      = saveGeometry();
     cfg.state         = saveState();
+    cfg.theme         = m_theme;   // 从界面读不到的主题项，得靠这一行带出来
 
     return cfg;
 }

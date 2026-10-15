@@ -235,6 +235,10 @@ AppConfig ConfigManager::loadChecked(QString* error)
     // 把老配置当成新结构，反而把面板恢复成错的样子。
     cfg.layoutVersion = s.value(QStringLiteral("window/layoutVersion"), 0).toInt();
 
+    // 缺这个键的老配置读成 "system"，也就是加这一项之前的实际行为。
+    cfg.theme = themeFromString(
+        s.value(QStringLiteral("app/theme"), themeToString(Theme::System)).toString());
+
     // 读完才看 status()：QSettings 的读取是惰性的，只有真读完了才知道文件坏没坏。
     // 上面每一条 value() 在 FormatError 时都拿不到值，读回来是一份全新的默认
     // 配置 —— 此刻不报出去，调用方会以为"用户就是默认值"，退出时再把这份默认值
@@ -300,6 +304,10 @@ bool ConfigManager::saveChecked(const AppConfig& cfg, QString* error)
     s.setValue(QStringLiteral("window/geometry"), cfg.geometry);
     s.setValue(QStringLiteral("window/state"),    cfg.state);
     s.setValue(QStringLiteral("window/layoutVersion"), kLayoutVersion);
+
+    // 存字符串而不是 int：这个值会被人手改 ini，手改时看到 "dark"
+    // 比看到 "2" 靠谱。读侧对认不出的值回落 System，见 themeFromString。
+    s.setValue(QStringLiteral("app/theme"), themeToString(cfg.theme));
 
     // 必须 sync() 再看 status()：QSettings 的写入是异步的，
     // 不 sync 的话 status() 反映的不是本次保存的结果。

@@ -51,6 +51,14 @@ private slots:
     void save_stamps_layout_version();
     void missing_layout_version_reads_as_zero();
 
+    // ---- 主题：往返 + 坏值回落 ----
+    void theme_round_trips_through_the_ini();
+    void missing_theme_reads_as_system();
+    // ini 是给人手改的。手改成看不懂的值时必须回落到 System ——
+    // 那是加这一项之前的实际行为，比猜错强。
+    void unrecognised_theme_value_reads_as_system();
+    void theme_string_conversion_is_case_insensitive();
+
     // ---- 配置读坏了必须报出来 ----
     void corrupt_file_is_reported_by_load_checked();
     void healthy_file_reports_no_error();
@@ -519,6 +527,45 @@ void TestConfigManager::missing_layout_version_reads_as_zero()
     // MainWindow 会跳过 state 恢复。若这里回落到 kLayoutVersion，
     // 旧 blob 就会被套到新控件树上，面板会恢复成错的样子而且不报错。
     QCOMPARE(ConfigManager::load().layoutVersion, 0);
+}
+
+// ---- 主题 ----
+
+void TestConfigManager::theme_round_trips_through_the_ini()
+{
+    // 存字符串而不是 int：ini 会被人手改，看到 "dark" 比看到 "2" 靠谱。
+    for (Theme t : { Theme::System, Theme::Light, Theme::Dark }) {
+        AppConfig cfg;
+        cfg.theme = t;
+        ConfigManager::save(cfg);
+        QCOMPARE(ConfigManager::load().theme, t);
+    }
+}
+
+void TestConfigManager::missing_theme_reads_as_system()
+{
+    // 没有这个键 = 加这一项之前的配置，那时界面就是跟随系统的。
+    // 回落到 Light 或 Dark 都等于升级就改了用户的界面。
+    QCOMPARE(ConfigManager::load().theme, Theme::System);
+}
+
+void TestConfigManager::unrecognised_theme_value_reads_as_system()
+{
+    // 手改成看不懂的值时宁可按 System 起，也不要猜：猜错是界面无缘无故
+    // 变样，而且用户根本不知道自己"改"过什么。
+    for (const char* bad : { "", "  ", "DARKISH", "深色", "2", "yes" }) {
+        writeRaw(QStringLiteral("app/theme"), QString::fromLatin1(bad));
+        QCOMPARE(ConfigManager::load().theme, Theme::System);
+    }
+}
+
+void TestConfigManager::theme_string_conversion_is_case_insensitive()
+{
+    // 手写 ini 的人不会严格照着大小写打。
+    QCOMPARE(themeFromString(QStringLiteral("DARK")), Theme::Dark);
+    QCOMPARE(themeFromString(QStringLiteral(" Light ")), Theme::Light);
+    QCOMPARE(themeFromString(QStringLiteral("System")), Theme::System);
+    QCOMPARE(themeToString(Theme::Dark), QStringLiteral("dark"));
 }
 
 // ---- 配置读坏了必须报出来 ----

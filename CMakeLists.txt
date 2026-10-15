@@ -54,8 +54,11 @@ set(SSCOM_UI_SOURCES
     src/ui/SendPanel.cpp
     src/ui/MultiSendTable.h
     src/ui/MultiSendTable.cpp
+    src/ui/Theme.h
+    src/ui/Theme.cpp
     src/ui/WrapLayout.h
     src/ui/WrapLayout.cpp
+    src/ui/OutgoingAccent.h
 )
 
 qt_add_executable(SerialMate
@@ -152,8 +155,11 @@ qt_add_executable(tst_multisendtable
     tests/tst_multisendtable.cpp
     src/ui/MultiSendTable.h
     src/ui/MultiSendTable.cpp
+    src/ui/Theme.h
+    src/ui/Theme.cpp
     src/ui/WrapLayout.h
     src/ui/WrapLayout.cpp
+    src/ui/OutgoingAccent.h
     src/core/DataFormatter.h
     src/core/DataFormatter.cpp
     src/core/TextCodec.h

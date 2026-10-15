@@ -11,6 +11,7 @@
 
 class MultiSendTable;
 class QAction;
+class QActionGroup;
 class QLabel;
 class ReceiveView;
 class QThread;
@@ -39,6 +40,11 @@ private:
     void startSerialThread();
     void applyConfig(const AppConfig& cfg);
     AppConfig collectConfig() const;
+    // 菜单切主题：落地 + 立刻落盘。
+    void setTheme(Theme theme);
+    // 只落地不落盘。applyConfig() 走这条 —— 它也会被 SSCOM 导入调用，
+    // 那时不该顺手把整份配置重写一遍。
+    void applyThemeToUi(Theme theme);
     void sendToPort(const QByteArray& data);
     void updateStatusCounters();
     void updateStatusParams();
@@ -65,6 +71,11 @@ private:
     QAction*             m_closeAction   = nullptr;
     // 「视图」菜单里的多字符串面板显隐开关，与 m_multiTable 的可见性双向同步
     QAction*             m_multiTableAction = nullptr;
+    // 「视图 → 主题」的三选一。单独存一份 m_theme 是因为 collectConfig()
+    // 是从界面现攒一份新配置的，不带这个字段就会在每次保存时退回 System ——
+    // 用户点了深色，一存盘就被抹掉。
+    QActionGroup*        m_themeGroup   = nullptr;
+    Theme                m_theme        = Theme::System;
 
     QThread*             m_thread = nullptr;
     SerialPortManager*   m_serial = nullptr;

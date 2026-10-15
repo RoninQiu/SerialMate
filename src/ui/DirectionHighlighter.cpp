@@ -26,9 +26,9 @@ DirectionHighlighter::DirectionHighlighter(QTextDocument* document)
 
 void DirectionHighlighter::refreshPalette()
 {
-    // 用 Base 而不是 Window 判断底色：接收区是编辑区，底色取自 Base 角色。
-    const bool dark = QApplication::palette().color(QPalette::Base).lightness() < 128;
-    m_incoming = dark ? kIncomingOnDark : kIncomingOnLight;
+    // 深浅判定交给 themeIsDark(currentTheme())：用户可以强制浅色/深色，
+    // 这时"调色板亮不亮"和"用户选了什么"未必一致，菜单勾了才算数。
+    m_incoming = themeIsDark(currentTheme()) ? kIncomingOnDark : kIncomingOnLight;
     m_outgoing = outgoingAccent().text;
     rehighlight();
 }
