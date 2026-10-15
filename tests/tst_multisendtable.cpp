@@ -10,6 +10,7 @@
 #include "core/SendQueueManager.h"
 
 #include <QApplication>
+#include <QFontMetrics>
 #include <QLabel>
 #include <QLineEdit>
 #include <QPushButton>
@@ -80,6 +81,18 @@ private slots:
     void setCurrentRow_scrolls_a_row_that_is_out_of_sight();
     void setCurrentRow_does_not_scroll_while_a_cell_is_being_edited();
     void status_text_names_the_row_and_its_interval();
+    // 回归钉：状态行只能有 222px（面板被 setStretchFactor(2,0) 钉死，实测），
+    // 而完整一行要 340px。恒定的短信息必须排在会变长的注释前面。
+    void status_text_puts_the_interval_before_the_comment();
+    // 回归钉：被省略掉的那截必须留下省略号，且序号与间隔不能被吃掉。
+    void status_text_is_elided_instead_of_being_silently_cut();
+    // 回归钉：注释是"按 label 实际宽度"倒推预算截出来的，而 label 的宽度
+    // 又由它自己的文字决定 —— 不把宽度钉死就是循环依赖。底部 addStretch(1)
+    // 已改成加在 label 上；这一条**故意没有**单测：offscreen 没有字体引擎，
+    // CJK 的 advance 完全失真（实测同一个 label 宽度会从 239 跳到 600 并溢出
+    // 560 的控件），写出来的断言在 offscreen 下量不到真实行为。
+    // 改完请用 build/probe_statuslabel 在真实 windows 平台复测：
+    // 期望 label 恒为 222px，短注释完整、长注释带「…」且 clipped=no。
     void status_text_is_cleared_together_with_the_highlight();
     void single_send_highlights_that_row_then_fades();
     // 竞态：单发的余晖到期时，循环可能已经把指示挪到别的行了。
@@ -716,6 +729,14 @@ void TestMultiSendTable::status_text_names_the_row_and_its_interval()
     QLabel* status = m.findChild<QLabel*>();
     QVERIFY(status);
 
+    // 注释那段是按 label 的**实际**宽度倒推预算后才塞进去的（见 updateStatusText），
+    // 所以这里必须先把控件摆出来 —— 不 show 的话 label 只有几十像素宽，
+    // 注释会整段消失，断言的就不再是产品真实会显示的东西。
+    // 这跟 Windows style 那条一样：用例得自己造出前提。
+    m.resize(560, 400);
+    m.show();
+    QVERIFY(QTest::qWaitForWindowExposed(&m));
+
     t->item(6, 1)->setText(QStringLiteral("读状态"));
     const int ms = 5000;
     t->item(6, 4)->setData(Qt::UserRole, ms);
@@ -727,6 +748,82 @@ void TestMultiSendTable::status_text_names_the_row_and_its_interval()
     QVERIFY2(text.contains(QStringLiteral("07")), qPrintable(text));
     QVERIFY2(text.contains(QStringLiteral("读状态")), qPrintable(text));
     QVERIFY2(text.contains(QStringLiteral("5000")), qPrintable(text));
+}
+
+void TestMultiSendTable::status_text_puts_the_interval_before_the_comment()
+{
+    // 顺序是契约，不是排版口味。
+    //
+    // 实测（build/probe_statuslabel，真实 windows 平台）：右侧面板被
+    // MainWindow 的 setStretchFactor(2, 0) 钉在 560px —— 窗口放到 1920 也一样 ——
+    // 状态 label 恒定只分到 222px，而"当前 04/99 · 间隔 4000 ms"就占 149px。
+    // 原来的顺序是 序号 · 注释 · 间隔，注释一长就把末尾的「间隔 N ms」
+    // 整个切没了。恒定的短信息必须先占住位置。
+    MultiSendTable m;
+    QTableWidget* t = tableOf(m);
+    QLabel* status = m.findChild<QLabel*>();
+    QVERIFY(status);
+
+    const QString comment = QStringLiteral("校准：掉线后重连并重读全部状态参数");
+    t->item(6, 1)->setText(comment);
+    t->item(6, 4)->setData(Qt::UserRole, 4000);
+    t->item(6, 4)->setText(QStringLiteral("4000"));
+
+    m.setCurrentRow(6);
+
+    const QString text = status->text();
+    const int msAt = text.indexOf(QStringLiteral("4000"));
+    const int commentAt = text.indexOf(comment);
+    QVERIFY2(msAt >= 0, qPrintable(text));
+    if (commentAt >= 0)
+        QVERIFY2(msAt < commentAt, qPrintable(text));
+}
+
+void TestMultiSendTable::status_text_is_elided_instead_of_being_silently_cut()
+{
+    // 只对注释名做固定像素省略是不够的：那样被切掉的那截是**无声**的 ——
+    // 少的部分连省略号都没有，看着像本来就那么长，用户根本不知道
+    // 「间隔 N ms」被吃掉了。所以整串都必须按 label 的实际宽度省略。
+    MultiSendTable m;
+    QTableWidget* t = tableOf(m);
+    QLabel* status = m.findChild<QLabel*>();
+    QVERIFY(status);
+
+    const QString comment = QStringLiteral("校准：掉线后重连并重读全部状态参数");
+    t->item(6, 1)->setText(comment);
+    t->item(6, 4)->setData(Qt::UserRole, 4000);
+    t->item(6, 4)->setText(QStringLiteral("4000"));
+
+    // 宽度按**当前度量自校准**，不写死像素。
+    //
+    // 踩过的坑：offscreen 平台没有字体引擎（QFontDatabase::families() 实测
+    // 为空），CJK 的 advance 小得离谱，跟真实平台完全不是一个量级 ——
+    // 拿真实平台量出来的 222/340 去写断言，在 offscreen 下前提根本不成立，
+    // 钉子就变成了依赖环境的假断言。这里改成"head 放得下、head+注释放不下"，
+    // 那个宽度由当前字体的度量算出来，在哪跑都成立。
+    const QFontMetrics fm(status->font());
+    const QString head = QStringLiteral("当前 07/99 · 间隔 4000 ms");
+    const QString sep  = QStringLiteral(" · ");
+    const int headW = fm.horizontalAdvance(head);
+    const int sepW  = fm.horizontalAdvance(sep);
+    const int nameW = fm.horizontalAdvance(comment);
+    QVERIFY2(nameW > 0, "没有字体引擎的话这条用例没法判，省得报一个看不懂的错");
+    status->setFixedWidth(headW + sepW + nameW / 2);
+
+    m.resize(560, 400);
+    m.show();
+    QVERIFY(QTest::qWaitForWindowExposed(&m));
+    QCOMPARE(status->width(), headW + sepW + nameW / 2);
+
+    m.setCurrentRow(6);
+
+    const QString shown = status->text();
+    // 序号与间隔不能被吃掉 —— 这是这条用例真正想守的东西
+    QVERIFY2(shown.startsWith(head), qPrintable(shown));
+    // 且必须留下省略号，让"少了一截"这件事看得见，而不是无声无息地切掉
+    QVERIFY2(shown.endsWith(QChar(0x2026)), qPrintable(shown));
+    // 显示出来的必须放得下（原来失败的地方就是硬切，宽度超了）
+    QVERIFY2(fm.horizontalAdvance(shown) <= status->width(), qPrintable(shown));
 }
 
 void TestMultiSendTable::status_text_is_cleared_together_with_the_highlight()

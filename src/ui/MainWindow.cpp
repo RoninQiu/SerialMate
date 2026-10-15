@@ -375,7 +375,9 @@ void MainWindow::startSerialThread()
     connect(m_thread, &QThread::finished, m_serial, &QObject::deleteLater);
 
     connect(m_serial, &SerialPortManager::opened, this,
-            [this](const QString& name) {
+            // 端口名由 opened 带来，但这里不再用它 —— 见下方 m_statusConn 那段。
+            // 参数留着名字会被 -Wall -Wextra 报未使用，签名仍要与信号对齐。
+            [this](const QString&) {
                 // 顺序不可换：setControlsEnabled(false) 会把打开按钮设为可用
                 //（它同时是"关闭串口"的入口），而 setOpenState 只改文字、不碰
                 // enabled。反了就让"关闭串口"永久灰掉。
@@ -391,7 +393,12 @@ void MainWindow::startSerialThread()
                 // 而快捷键走的是 trigger()，那条路不看可见性 —— 所以还得禁用。
                 if (m_openAction)
                     m_openAction->setEnabled(false);
-                m_statusConn->setText(tr("串口已打开：%1").arg(name));
+                // 这里只说开没开，端口名与参数由右边的 m_statusParam 统一给。
+                // 早期这里带了个 .arg(name)，与 m_statusParam 里的 portName 撞车，
+                // 开着口时读作「串口已打开：COM5  COM5  115200,8,0,1」——
+                // 需求 §状态栏要的是「串口已打开 | COM1 | 9600,8,N,1」，端口名只出现一次。
+                // 下面的「串口已关闭」分支本来就不带端口名，两边对称。
+                m_statusConn->setText(tr("串口已打开"));
                 m_portOpen = true;
                 // 串口没开时发送控件是禁用的，这里放开。
                 m_sendPanel->setSendEnabled(true);
