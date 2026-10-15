@@ -108,7 +108,6 @@ SscomImportReport SscomImporter::import(const QByteArray& gbkRaw, AppConfig& tar
     // SSCOM 写文件时把 N101..N199 排在前面、N1051 之后才写设置项，
     // 但 ini 的语义与行序无关，用哈希收比边读边用更不容易出错。
     QHash<QString, QString> values;
-    bool sawAnyKey = false;
     const QStringList lines = text.split(QRegularExpression(QStringLiteral("\r\n|\n|\r")));
     for (const QString& rawLine : lines) {
         const QString line = rawLine.trimmed();
@@ -118,10 +117,28 @@ SscomImportReport SscomImporter::import(const QByteArray& gbkRaw, AppConfig& tar
         if (eq <= 0)
             continue;
         values.insert(line.left(eq).trimmed(), line.mid(eq + 1));
-        sawAnyKey = true;
     }
-    if (!sawAnyKey) {
-        rep.error = QStringLiteral("文件里没有可识别的 N 开头条目，它可能不是 SSCOM 5.13.1 的 sscom51.ini。");
+
+    // 「这是不是 SSCOM 的 ini」必须按**能认出来的 N 键**判，不能只看有没有 key=value。
+    //
+    // 原判据是 sawAnyKey（任意一行 key=value 就算数），而文件对话框里还开着
+    // 「所有文件 (*)」——用户很容易误选本程序自己的 SerialMate.ini 或任何普通
+    // ini。那种文件满是 key=value，一律被判成"导入成功"，接着多字符串那段会拿
+    // 99 个空条目覆盖用户现有的配置，MainWindow 随即把它落盘：辛苦攒的 99 条
+    // 就此消失，而报告里一句提示都没有。
+    //
+    // classify() 已经把 N 键分成 Content / ItemMeta / Setting / Unknown，
+    // 直接数认出来的有几个即可。顺带让下面那句报错文案与判据对得上 ——
+    // 原先文案说的是"N 开头条目"，判据却是有 key=value，两回事。
+    int recognized = 0;
+    for (auto it = values.constBegin(); it != values.constEnd(); ++it) {
+        if (classify(it.key()).kind != KeyKind::Unknown)
+            ++recognized;
+    }
+    if (recognized == 0) {
+        rep.error = QStringLiteral(
+            "文件里没有可识别的 SSCOM 条目（形如 N1=...、N1080=... 的 N 键），"
+            "它可能不是 SSCOM 5.13.1 的 sscom51.ini。本次未改动任何配置。");
         return rep;
     }
 
@@ -294,14 +311,20 @@ SscomImportReport SscomImporter::import(const QByteArray& gbkRaw, AppConfig& tar
         items.append(item);
         ++seenContent;
     }
-    while (items.size() < kSendItemCount)
-        items.append(SendItem());
-    target.sendItems = items;
-
-    rep.itemsImported = seenContent;
-    rep.itemsDropped  = dropped;
-    if (dropped > 0) {
-        rep.notes.append(QStringLiteral("有 %1 条多字符串超出 99 条上限，未导入。").arg(dropped));
+    // 一条多字符串都没认出来时**不碰**用户现有的 99 条。
+    // 认出来的 N 键可能只是别的设置项（N1080 之类），多字符串那部分对不上号；
+    // 用 99 个空条目盖上去，用户攒的内容当场消失且无法找回。
+    if (seenContent > 0) {
+        while (items.size() < kSendItemCount)
+            items.append(SendItem());
+        target.sendItems = items;
+        rep.itemsImported = seenContent;
+        rep.itemsDropped  = dropped;
+        if (dropped > 0)
+            rep.notes.append(QStringLiteral("有 %1 条多字符串超出 99 条上限，未导入。").arg(dropped));
+    } else {
+        rep.notes.append(QStringLiteral(
+            "文件里没有可识别的多字符串条目（N1..N99），现有 99 条保持原样、未被覆盖。"));
     }
     if (seenContent > 0) {
         rep.notes.append(QStringLiteral(

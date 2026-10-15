@@ -53,6 +53,11 @@ private slots:
     void key_number_ranges_do_not_collide();
     void dropped_counter_guards_future_count_changes();
     void sets_encoding_to_local_always();
+
+    // 选错文件时必须拒绝，而不是当成导入成功
+    void rejects_a_file_that_merely_has_key_value_lines();
+    void rejected_file_leaves_target_untouched();
+    void keeps_existing_items_when_no_multi_string_found();
     void preserves_keys_absent_from_file();
     void real_sscom_ini_maps_as_expected();
 };
@@ -305,6 +310,91 @@ void TestSscomImporter::real_sscom_ini_maps_as_expected()
     QCOMPARE(cfg.sendItems.at(2).content, QStringLiteral("欢迎您使用SSCOM!"));
     QCOMPARE(cfg.sendItems.at(2).name, QStringLiteral("欢迎语"));
     QCOMPARE(cfg.sendEncoding, TextEncoding::Local);
+}
+
+void TestSscomImporter::rejects_a_file_that_merely_has_key_value_lines()
+{
+    // 评审发现的缺陷：判据原是"有没有任意一行 key=value"。而文件对话框里开着
+    // 「所有文件 (*)」，用户很容易误选本程序自己的 SerialMate.ini —— 那种文件
+    // 满是 key=value，一律被判成"导入成功"，接着 99 个空条目就盖上去了。
+    // 判据必须落在 classify() 认得出的 N 键上。
+    const QString plain = QStringLiteral(
+        "[serial]\r\nport=COM5\r\nbaud=115200\r\ndataBits=8\r\n"
+        "[recv]\r\nhex=true\r\ntimestamp=false\r\nwrap=true\r\n"
+        "[sendItems]\r\nsize=99\r\n1\\enabled=false\r\n1\\content=AT\r\n");
+
+    AppConfig cfg;                                   // 空的基底
+    cfg.serial.portName = QStringLiteral("COM1");
+    cfg.sendItems.clear();
+    for (int i = 0; i < kSendItemCount; ++i)
+        cfg.sendItems.append(SendItem());
+
+    const SscomImportReport rep =
+        SscomImporter::import(toGbk(plain), cfg);
+
+    QVERIFY2(!rep.ok, "普通 ini 不该被判成 SSCOM 配置导入成功");
+    QVERIFY2(rep.error.contains(QStringLiteral("N")),
+             qPrintable(QStringLiteral("报错应说明缺少可识别的 N 键，实际：%1").arg(rep.error)));
+}
+
+void TestSscomImporter::rejected_file_leaves_target_untouched()
+{
+    const QString plain = QStringLiteral("[serial]\r\nport=COM5\r\nbaud=9600\r\n");
+
+    AppConfig cfg;
+    cfg.serial.portName  = QStringLiteral("COM9");
+    cfg.serial.baudRate  = 57600;
+    cfg.sendText         = QStringLiteral("别动我");
+    cfg.recvBufferLimit  = 200000;
+    cfg.sendItems.clear();
+    for (int i = 0; i < kSendItemCount; ++i) {
+        SendItem it;
+        it.content = QStringLiteral("我自己的%1").arg(i);
+        cfg.sendItems.append(it);
+    }
+
+    const SscomImportReport rep = SscomImporter::import(toGbk(plain), cfg);
+
+    QVERIFY(!rep.ok);
+    QCOMPARE(cfg.serial.portName, QStringLiteral("COM9"));
+    QCOMPARE(cfg.serial.baudRate, 57600);
+    QCOMPARE(cfg.sendText, QStringLiteral("别动我"));
+    QCOMPARE(cfg.recvBufferLimit, qsizetype(200000));
+    QCOMPARE(cfg.sendItems.size(), kSendItemCount);
+    QCOMPARE(cfg.sendItems.at(42).content, QStringLiteral("我自己的42"));
+    // 编码也不能被顺手改成 Local —— 那是"导入成功"才该做的事
+    QCOMPARE(cfg.sendEncoding, TextEncoding::Utf8);
+}
+
+void TestSscomImporter::keeps_existing_items_when_no_multi_string_found()
+{
+    // 是 SSCOM 的 ini、但一条多字符串都没有（N1..N99 缺失）时，
+    // 也不能拿 99 个空条目盖掉用户现有的 —— 认出来的可能只是别的设置项。
+    // 注意 SSCOM 的 ini 里值是**前导逗号**格式（"N1080=,COM7"），
+    // stripLeadingComma() 剥的是那个逗号，写成 "N1080=3,COM7" 会被整段当成串口号。
+    const QString serialOnly = QStringLiteral("N1080=,COM7\r\nN1081=,19200\r\n");
+
+    AppConfig cfg;
+    cfg.sendItems.clear();
+    for (int i = 0; i < kSendItemCount; ++i) {
+        SendItem it;
+        it.content = QStringLiteral("保留%1").arg(i);
+        cfg.sendItems.append(it);
+    }
+
+    const SscomImportReport rep = SscomImporter::import(toGbk(serialOnly), cfg);
+
+    QVERIFY2(rep.ok, qPrintable(QStringLiteral("有 N 键就该认作 SSCOM 配置：%1").arg(rep.error)));
+    QCOMPARE(cfg.serial.portName, QStringLiteral("COM7"));
+    QCOMPARE(rep.itemsImported, 0);
+    QCOMPARE(cfg.sendItems.size(), kSendItemCount);
+    QCOMPARE(cfg.sendItems.at(0).content, QStringLiteral("保留0"));
+    QCOMPARE(cfg.sendItems.at(98).content, QStringLiteral("保留98"));
+
+    bool mentioned = false;
+    for (const QString& n : rep.notes)
+        if (n.contains(QStringLiteral("保持原样"))) mentioned = true;
+    QVERIFY2(mentioned, "notes 里应说明现有 99 条未被覆盖");
 }
 
 QTEST_MAIN(TestSscomImporter)
