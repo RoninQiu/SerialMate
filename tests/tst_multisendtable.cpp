@@ -9,14 +9,18 @@
 // 目的就是让"这个测试目标只测 MultiSendTable 的接线"这件事保持可读。
 #include "core/SendQueueManager.h"
 
+#include <QApplication>
 #include <QLabel>
 #include <QLineEdit>
 #include <QPushButton>
 #include <QScrollBar>
 #include <QSignalSpy>
 #include <QSpinBox>
+#include <QStyleFactory>
 #include <QTableWidget>
 #include <QTest>
+
+#include <memory>
 
 // 这一层此前完全没有测试，而 2026-10-15 的评审恰好在这里挖出一个已发布的缺陷：
 // 间隔列的 QTableWidgetItem 少了 Qt::ItemIsEditable，导致 QAbstractItemView::edit()
@@ -33,6 +37,8 @@ class TestMultiSendTable : public QObject
     Q_OBJECT
 
 private slots:
+    void initTestCase();
+
     // ---- 回归：间隔列必须真的能打开编辑器 ----
     void interval_column_opens_the_spinbox_editor();
     void interval_bounds_come_from_the_shared_constants();
@@ -83,8 +89,15 @@ private slots:
     // 调色板换了不会回头重取 —— 实测切深色后仍是一条浅米色的带。
     void palette_change_repaints_the_highlighted_row();
     void palette_change_without_a_highlight_does_nothing();
+    // 深浅两档走不同的 QStyle，而 setStyle 是**粘的**：
+    // 少一次显式设回原生，深↔浅来回切就会永远卡在 Fusion 上。
+    void light_theme_restores_the_platform_style();
+    void dark_theme_uses_fusion();
 
 private:
+    // 平台默认 style 的 objectName。在任何主题被应用之前记下来 ——
+    // 这就是浅色档该切回去的那个。
+    QString m_platformStyle;
     static QTableWidget* tableOf(MultiSendTable& m);
     static QSpinBox* openIntervalEditor(QTableWidget* t, int row);
     // 移开当前格是提交编辑器最省事也最接近真实的做法：
@@ -96,8 +109,30 @@ private:
     static void waitOutTheDebounce() { QTest::qWait(450); }
 };
 
-QTableWidget* TestMultiSendTable::tableOf(MultiSendTable& m)
+void TestMultiSendTable::initTestCase()
 {
+    // 刻意把平台默认 style 换成 windowsvista（Windows 10 上 Qt 用的就是它），
+    // 而不是就地记当前这个。
+    //
+    // 原因：CI/本机跑测试都带 QT_QPA_PLATFORM=offscreen，而 offscreen 平台
+    // 没有原生主题，Qt 给的默认 style **就是 Fusion**。那就永远测不出
+    // "浅色有没有切回原生" —— platform 和期望值都是 fusion，怎么切都对，
+    // 这条用例会一直绿着却什么也没钉住。实测踩过：拿掉浅色档的 setStyle
+    // 之后，offscreen 下这条照样全绿，换到真实 windows 平台立刻 FAIL。
+    //
+    // 所以这里主动造出差异：platform = windowsvista，浅色期望值也必须是
+    // windowsvista，一旦深色切上去没切回来就会红。
+    QApplication::setStyle(QStyleFactory::create(QStringLiteral("windowsvista")));
+    m_platformStyle = QApplication::style()->objectName();
+    QCOMPARE(m_platformStyle, QStringLiteral("windowsvista"));
+
+    // 两边必须真的不同，否则下面所有关于 style 的断言都是恒真的
+    const std::unique_ptr<QStyle> fusion(QStyleFactory::create(QStringLiteral("Fusion")));
+    QVERIFY(fusion);
+    QVERIFY(fusion->objectName() != m_platformStyle);
+}
+
+QTableWidget* TestMultiSendTable::tableOf(MultiSendTable& m){
     return m.findChild<QTableWidget*>();
 }
 
@@ -791,5 +826,43 @@ void TestMultiSendTable::palette_change_without_a_highlight_does_nothing()
     applyTheme(Theme::System);
 }
 
+void TestMultiSendTable::light_theme_restores_the_platform_style()
+{
+    // 这条钉的是 setStyle 的**粘性**。Win11 默认 windows11、Win10 默认
+    // windowsvista，两边都要能切回去；键的解析是"逐个建一遍比对 objectName"，
+    // 不赌平台碰巧同名（见 Theme.cpp 的 nativeStyleKey）。
+    //
+    // initTestCase 里记下的就是本进程的平台默认值，所以这条断言在
+    // Win10 与 Win11 上各自成立，不用把机器名写死进测试。
+    applyTheme(Theme::Light);
+    const QString platform = m_platformStyle;
+    QCOMPARE(QApplication::style()->objectName(), platform);
+
+    applyTheme(Theme::Dark);
+    QCOMPARE(QApplication::style()->objectName(), QStringLiteral("fusion"));
+
+    // 来回切多次：setStyle 粘着，少一次设回原生就会永远停在 Fusion
+    for (int i = 0; i < 3; ++i) {
+        applyTheme(Theme::Light);
+        applyTheme(Theme::Dark);
+    }
+    applyTheme(Theme::Light);
+    QCOMPARE(QApplication::style()->objectName(), platform);
+
+    applyTheme(Theme::System);
+}
+
+void TestMultiSendTable::dark_theme_uses_fusion()
+{
+    // 深色必须换 style：只换调色板的话原生 windows11/windowsvista 的滚动条
+    // 仍用系统色，深底上是一条白杠（探针 build/probe_theme 实测）。
+    applyTheme(Theme::Dark);
+    QCOMPARE(QApplication::style()->objectName(), QStringLiteral("fusion"));
+
+    applyTheme(Theme::System);
+}
+
 QTEST_MAIN(TestMultiSendTable)
 #include "tst_multisendtable.moc"
+
+
