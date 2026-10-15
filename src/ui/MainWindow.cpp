@@ -313,6 +313,10 @@ void MainWindow::startSerialThread()
                 if (m_closeAction)
                     m_closeAction->setVisible(true);
                 m_statusConn->setText(tr("串口已打开：%1").arg(name));
+                m_portOpen = true;
+                // 串口没开时发送控件是禁用的，这里放开。
+                m_sendPanel->setSendEnabled(true);
+                m_multiTable->setSendEnabled(true);
                 updateStatusParams();
             }, Qt::QueuedConnection);
 
@@ -326,6 +330,11 @@ void MainWindow::startSerialThread()
         if (m_closeAction)
             m_closeAction->setVisible(false);
         m_statusConn->setText(tr("串口已关闭"));
+        m_portOpen = false;
+        // 发送控件一并禁用：SSCOM 也是这么做的，且能彻底堵死"串口没开却点了发送"
+        // 这条路径 —— 计数与回显的谎话就不会有机会产生。
+        m_sendPanel->setSendEnabled(false);
+        m_multiTable->setSendEnabled(false);
         // 串口没了却还在"发送中"，用户会一直以为在发数据
         m_queue->stop();
         m_sendPanel->stopSending();
@@ -346,6 +355,13 @@ void MainWindow::wireSignals()
 {
     m_queue = new SendQueueManager(this);
     m_recvView->setSerialSource(m_serial);
+
+    // 启动时串口是关的，发送控件必须先禁掉。
+    // QPushButton 默认是 enabled，不显式禁的话用户一进来就能点发送 ——
+    // 而 MultiSendTable::m_sendEnabled 的初值是 false，视觉与实际状态会对不上。
+    m_portOpen = false;
+    m_sendPanel->setSendEnabled(false);
+    m_multiTable->setSendEnabled(false);
 
     // ---- 串口打开 / 关闭 ----
     connect(m_serialPanel, &SerialConfigPanel::openRequested, this,
@@ -405,6 +421,17 @@ void MainWindow::sendToPort(const QByteArray& data)
 {
     if (data.isEmpty())
         return;
+
+    if (!m_portOpen) {
+        // 没发出去的就不能记账、也不能回显 —— 那两样都会被读成"已经发送了"。
+        // 发送按钮此时本就是禁用的（见 opened/closed 里的 setSendEnabled），
+        // 走到这里通常是串口刚被拔掉、状态还没同步过来的那一瞬。
+        //
+        // 用状态栏而不是 QMessageBox：sendRequested 可能来自定时发送，而
+        // QMessageBox 会开嵌套事件循环，期间定时器仍 active → onTick 无限套娃。
+        statusBar()->showMessage(tr("串口未打开，数据未发送"), 3000);
+        return;
+    }
 
     QMetaObject::invokeMethod(m_serial, "writeData", Qt::QueuedConnection,
                               Q_ARG(QByteArray, data));

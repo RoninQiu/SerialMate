@@ -165,3 +165,13 @@ target_include_directories(tst_multisendtable PRIVATE src)
 # 本机有桌面会话时直接跑真实平台插件，与其余四个测试目标保持同一套行为。
 target_link_libraries(tst_multisendtable PRIVATE Qt6::Test Qt6::Widgets Qt6::SerialPort)
 add_test(NAME multisendtable COMMAND tst_multisendtable)
+
+qt_add_executable(tst_serialportmanager
+    tests/tst_serialportmanager.cpp
+    src/core/SerialPortManager.h
+    src/core/SerialPortManager.cpp
+)
+target_include_directories(tst_serialportmanager PRIVATE src)
+# models.h -> <QSerialPort>。不需要 Widgets：这里只测不需要真实串口的那部分契约。
+target_link_libraries(tst_serialportmanager PRIVATE Qt6::Test Qt6::SerialPort)
+add_test(NAME serialportmanager COMMAND tst_serialportmanager)

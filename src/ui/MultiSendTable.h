@@ -85,6 +85,9 @@ public:
     void stopLoop();
     void applyIntervalToAll();        // 把「全部间隔」一键写进每一行
 
+    // 串口关闭时调用，禁掉循环开关与每行的「发送」按钮。
+    void setSendEnabled(bool on);
+
     // 发送编码，与 SendPanel / SendQueueManager 共用，由 MainWindow 同步
     void setTextEncoding(TextEncoding enc);
 
@@ -107,4 +110,6 @@ private:
     QSpinBox*         m_intervalSpin = nullptr;
     QPushButton*      m_applyAllBtn  = nullptr;
     TextEncoding      m_encoding     = TextEncoding::Utf8;
+    // 串口是否已打开。按钮的 enabled 只是给人看的，sendRow() 里还要靠它兜底。
+    bool              m_sendEnabled  = false;
 };

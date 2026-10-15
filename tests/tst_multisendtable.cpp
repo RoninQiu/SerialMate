@@ -5,6 +5,7 @@
 #include "core/AppConfigTypes.h"
 
 #include <QLineEdit>
+#include <QPushButton>
 #include <QSignalSpy>
 #include <QSpinBox>
 #include <QTableWidget>
@@ -38,6 +39,10 @@ private slots:
 
     // ---- 同一张表上的另一根接线：内容列回车即发（FR-04-6）----
     void content_enter_sends_that_row();
+
+    // ---- 串口没开时不允许发送 ----
+    void send_is_blocked_while_disabled();
+    void set_send_enabled_toggles_the_row_buttons();
 
 private:
     static QTableWidget* tableOf(MultiSendTable& m);
@@ -210,6 +215,8 @@ void TestMultiSendTable::content_enter_sends_that_row()
     static const int kContentCol = 5;
     const int row = 7;
 
+    // 串口没开时不该发得出去 —— MainWindow 在 opened/closed 里调它
+    m.setSendEnabled(true);
     QSignalSpy spy(&m, &MultiSendTable::sendRequested);
 
     const QModelIndex idx = t->model()->index(row, kContentCol);
@@ -228,6 +235,59 @@ void TestMultiSendTable::content_enter_sends_that_row()
     // 用 QTRY_COMPARE 而不是 QCOMPARE —— 后者在同步测试里根本等不到那次排队调用。
     QTRY_COMPARE(spy.count(), 1);
     QCOMPARE(spy.at(0).at(0).toByteArray(), QByteArray("WORLD"));
+}
+
+void TestMultiSendTable::send_is_blocked_while_disabled()
+{
+    // 评审发现的缺陷：串口没开时发送被静默丢弃，而 MainWindow 那边的
+    // 发送计数与「→ 发」回显已经做完了 —— 用户看到"发成功了"。
+    // 防线有两层：按钮禁用（给人看）与这里的 sendEnabled 兜底
+    // （按钮的 enabled 与串口状态隔着一次队列连接，拔线那一瞬仍点得动）。
+    MultiSendTable m;
+    QTableWidget* t = tableOf(m);
+    static const int kContentCol = 5;
+    const int row = 9;
+
+    m.setSendEnabled(false);
+    t->item(row, kContentCol)->setText(QStringLiteral("PAYLOAD"));
+
+    QSignalSpy spy(&m, &MultiSendTable::sendRequested);
+
+    const QModelIndex idx = t->model()->index(row, kContentCol);
+    t->setCurrentIndex(idx);
+    t->edit(idx);
+    QLineEdit* editor = t->viewport()->findChild<QLineEdit*>();
+    QVERIFY(editor);
+    editor->setText(QStringLiteral("PAYLOAD"));
+    QTest::keyClick(editor, Qt::Key_Return);
+
+    // 必须"先等再断言"，不能用 QTRY_COMPARE(spy.count(), 0)：后者在第一次检查时
+    // 当前值就是 0，立刻通过 —— 那次 QueuedConnection 的信号根本还没投递，
+    // 是一条空断言，删掉 sendRow() 里的守卫它照样绿（实测踩过）。
+    QTest::qWait(250);
+    QCOMPARE(spy.count(), 0);
+}
+
+void TestMultiSendTable::set_send_enabled_toggles_the_row_buttons()
+{
+    // 99 行的「发送」按钮都是 setCellWidget 挂进去的，setSendEnabled 要逐个改。
+    // 漏掉任何一行都会留下"这一行还能在串口没开时发出去"的口子。
+    MultiSendTable m;
+    QTableWidget* t = tableOf(m);
+    static const int kSendCol = 6;
+
+    m.setSendEnabled(false);
+    for (int row = 0; row < t->rowCount(); ++row) {
+        auto* btn = qobject_cast<QPushButton*>(t->cellWidget(row, kSendCol));
+        QVERIFY2(btn, qPrintable(QStringLiteral("第 %1 行没有发送按钮").arg(row)));
+        QVERIFY2(!btn->isEnabled(), qPrintable(QStringLiteral("第 %1 行禁用后仍可点").arg(row)));
+    }
+
+    m.setSendEnabled(true);
+    for (int row = 0; row < t->rowCount(); ++row) {
+        auto* btn = qobject_cast<QPushButton*>(t->cellWidget(row, kSendCol));
+        QVERIFY(btn->isEnabled());
+    }
 }
 
 QTEST_MAIN(TestMultiSendTable)

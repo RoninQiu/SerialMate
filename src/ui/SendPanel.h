@@ -27,6 +27,10 @@ public:
 
     void stopSending();
 
+    // 串口关闭时调用。禁掉发送入口，而不是让用户点了以后才知道发不出去 ——
+    // 计数与接收区的「→ 发」回显都发生在真正写出之前，失败时它们已经是假的了。
+    void setSendEnabled(bool on);
+
     // 串口关闭时必须调用，否则界面显示"正在发送"而实际空转（规格 §7）
     bool isSending() const;
 

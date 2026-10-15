@@ -102,6 +102,16 @@ void SendPanel::stopSending()
     m_timerCheck->setChecked(false);   // 触发 toggled 信号，进而 stop 定时器
 }
 
+void SendPanel::setSendEnabled(bool on)
+{
+    m_sendButton->setEnabled(on);
+    m_hexButton->setEnabled(on);
+    // 定时发送同理：串口没开时空转没有意义，而且每次 tick 都会去撞
+    // MainWindow::sendToPort 的守卫。不禁用勾选框的当前状态 ——
+    // 重开串口后用户希望它还在原来的选择上。
+    m_timerCheck->setEnabled(on);
+}
+
 bool SendPanel::hexMode() const
 {
     return m_hexCheck->isChecked();

@@ -72,4 +72,9 @@ private:
 
     qint64 m_recvCount = 0;
     qint64 m_sendCount = 0;
+
+    // 串口是否已打开，由 opened() / closed() 两个信号维护。
+    // SerialPortManager 跑在工作线程且没有 isOpen() 查询口，跨线程问它不安全，
+    // 所以 UI 侧自己记一份 —— 发送路径必须靠它才能保证"没发出去的不计数、不回显"。
+    bool    m_portOpen  = false;
 };

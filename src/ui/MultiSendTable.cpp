@@ -267,6 +267,18 @@ void MultiSendTable::stopLoop()
     m_loopCheck->setChecked(false);
 }
 
+void MultiSendTable::setSendEnabled(bool on)
+{
+    m_sendEnabled = on;
+    m_loopCheck->setEnabled(on);
+    // 每行的「发送」按钮是构造时 setCellWidget 挂进去的、没有单独存指针，
+    // 这里按列取回来逐个设。只在开关串口时发生一次，99 行的开销可以忽略。
+    for (int row = 0; row < m_table->rowCount(); ++row) {
+        if (auto* btn = qobject_cast<QPushButton*>(m_table->cellWidget(row, ColSend)))
+            btn->setEnabled(on);
+    }
+}
+
 void MultiSendTable::setTextEncoding(TextEncoding enc)
 {
     m_encoding = enc;
@@ -285,6 +297,11 @@ void MultiSendTable::onIntervalChanged(int ms)
 void MultiSendTable::sendRow(int row)
 {
     if (row < 0 || row >= kSendItemCount)
+        return;
+
+    // 串口没开时按钮已禁用，这里再挡一道：按钮的 enabled 状态与串口状态之间
+    // 隔着一次队列连接，拔线那一瞬仍可能点得动。
+    if (!m_sendEnabled)
         return;
 
     const QString raw = m_table->item(row, ColContent)->text();

@@ -85,6 +85,22 @@ void SerialPortManager::writeData(const QByteArray& data)
 {
     if (data.isEmpty())
         return;
+
+    // 串口没开就明确报错，不能往下走。
+    //
+    // 以前这里是直接 append 再交给 flushSendQueue()，那边发现端口没开就把队列
+    // 清空、不发任何信号；而调用方（MainWindow::sendToPort）在投递**之前**就已经
+    // 加了发送计数、把「→ 发」回显写进了接收区。两边一叠加，用户看到的是
+    // "发送: N 字节"、接收区多了一行「→ 发」，实际一个字节都没出去 ——
+    // 调试设备时这是最坏的一种撒谎。
+    //
+    // 注意与 flushSendQueue() 里那道 !isOpen() 的区别：那道是防御性兜底
+    // （端口在队列积压期间被关掉），这里是入口校验，该报错。
+    if (!m_open) {
+        emit errorOccurred(tr("串口未打开，%1 字节未发送").arg(data.size()));
+        return;
+    }
+
     m_sendQueue.append(data);
     flushSendQueue();
 }
