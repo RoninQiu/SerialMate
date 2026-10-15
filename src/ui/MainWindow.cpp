@@ -441,6 +441,17 @@ void MainWindow::wireSignals()
         else
             m_queue->stop();
     });
+    // ---- 标出「当前正在发送」的那一行 ----
+    // 队列每真正发出一条就报一次行号（发 sendRequested 之前），表格据此
+    // 上色 + 状态行。行号是队列下标，与表格行号严格 1:1，见 SendQueueManager.h。
+    connect(m_queue, &SendQueueManager::rowSent, m_multiTable, &MultiSendTable::setCurrentRow);
+    // 停下来必须清高亮：非循环跑完一轮后若把指示留在最后一行，
+    // 用户会以为它还在发 —— 停止后残留的指示比没有指示更糟。
+    // 串口被拔掉时走的也是这条（那里会先 m_queue->stop()）。
+    connect(m_queue, &SendQueueManager::runningChanged, m_multiTable, [this](bool running) {
+        if (!running)
+            m_multiTable->setCurrentRow(-1);
+    });
     // 循环跑着的时候改表，队列里的快照必须跟着换。
     // 少了这条：用户在第 5 行把间隔从 1000 改成 100，表格上白纸黑字写着 100，
     // 实际仍然每 1000ms 发一次，而且没有任何迹象说明它没跟上 ——

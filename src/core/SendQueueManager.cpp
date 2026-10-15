@@ -98,6 +98,7 @@ void SendQueueManager::onTick()
         }
 
         const SendItem& item = m_items.at(m_index);
+        const int row = m_index;   // 自增前留一份：这就是表格行号
         ++m_index;
         ++scanned;
 
@@ -118,6 +119,7 @@ void SendQueueManager::onTick()
                 continue;
         }
 
+        emit rowSent(row);
         emit sendRequested(data);
         // 节奏的关键一行：停多久由**刚发出的这一条**决定，不是全局值，
         // 也不是下一条的值。下一次 timeout 就发第 N+1 条。

@@ -40,6 +40,14 @@ public:
 signals:
     void sendRequested(const QByteArray& data);   // 已完成 HEX 解析
     void runningChanged(bool running);
+    // 刚发出的是 m_items 里的第几行。发在 sendRequested 之前，UI 可以在数据
+    // 真的写出之前就把"当前正在发送"标好。
+    //
+    // 为什么不靠内容反查：m_items 就是表格 99 行的原序快照（items() 逐行收集，
+    // MainWindow 原样传进来），禁用项靠 continue 跳过但索引照走，所以
+    // **m_index 就是表格行号**，下标直接可用。
+    // 哪天表格支持插入/删除行了，这个映射会断，那时才需要引入稳定 id。
+    void rowSent(int row);
 
 private slots:
     void onTick();

@@ -7,8 +7,10 @@
 // 目的就是让"这个测试目标只测 MultiSendTable 的接线"这件事保持可读。
 #include "core/SendQueueManager.h"
 
+#include <QLabel>
 #include <QLineEdit>
 #include <QPushButton>
+#include <QScrollBar>
 #include <QSignalSpy>
 #include <QSpinBox>
 #include <QTableWidget>
@@ -56,6 +58,25 @@ private slots:
     void apply_interval_to_all_emits_itemsEdited();
     void rapid_edits_collapse_into_a_single_signal();
     void editing_the_table_changes_what_the_queue_sends();
+
+    // ---- 标出「当前正在发送」的那一行 ----
+    void setCurrentRow_paints_the_whole_row();
+    void setCurrentRow_marks_the_index_and_name_cells_only();
+    void setCurrentRow_clears_the_row_it_replaces();
+    void setCurrentRow_rejects_a_row_outside_the_table();
+    // 回归钉：染色绝不能被当成"用户改了表"。QTableWidgetItem 的
+    // setBackground/setForeground 实测每次都发一次 itemChanged，而本表的
+    // itemChanged 接着就是 300ms 去抖 -> itemsEdited -> MainWindow 换队列快照。
+    // 少了 QSignalBlocker，循环每发一条就白白重建一次 99 项快照。
+    void highlighting_does_not_emit_itemsEdited();
+    void setCurrentRow_scrolls_a_row_that_is_out_of_sight();
+    void setCurrentRow_does_not_scroll_while_a_cell_is_being_edited();
+    void status_text_names_the_row_and_its_interval();
+    void status_text_is_cleared_together_with_the_highlight();
+    void single_send_highlights_that_row_then_fades();
+    // 竞态：单发的余晖到期时，循环可能已经把指示挪到别的行了。
+    // 无差别清会把正在发送的指示一起擦掉。
+    void fading_single_send_does_not_erase_a_newer_highlight();
 
 private:
     static QTableWidget* tableOf(MultiSendTable& m);
@@ -509,6 +530,217 @@ void TestMultiSendTable::editing_the_table_changes_what_the_queue_sends()
     // 队列跟上了：发的是改过的内容。
     // 若 updateItems 退化成 setItems（m_index 清零），这里会是 "KEEP"。
     QCOMPARE(sendSpy.at(1).at(0).toByteArray(), QByteArray("NEW"));
+}
+
+// ---- 标出「当前正在发送」的那一行 ----
+
+void TestMultiSendTable::setCurrentRow_paints_the_whole_row()
+{
+    // 判据来自 SSCOM 的做法为什么不够用：它只染「注释」列的字体，
+    // 注释为空时那一格没有字可染，界面上等于什么都没发生。
+    // 所以底色必须铺满整行，且不挑有没有字。
+    //
+    // 7 列全数：第 7 列（发送）挂的是 setCellWidget 的按钮，**另外还留了一个
+    // 空 item**。那个空 item 就是为了底色带不在这里断掉 —— 截图实测过，
+    // 少它的话橙色带止于内容列边缘，右侧留一截白，恰好断在
+    // "哪一条正在发"的视觉末尾。
+    MultiSendTable m;
+    QTableWidget* t = tableOf(m);
+    static const int kCols = 7;
+
+    m.setCurrentRow(4);
+
+    for (int col = 0; col < kCols; ++col) {
+        const QBrush bg = t->item(4, col)->background();
+        QCOMPARE(bg.style(), Qt::SolidPattern);
+        QVERIFY(bg.color().isValid());
+    }
+    QVERIFY(t->cellWidget(4, 6));   // 按钮还在，空 item 是加上去的，不是替代
+}
+
+void TestMultiSendTable::setCurrentRow_marks_the_index_and_name_cells_only()
+{
+    // 序号与注释是"这条是谁"的两条标识。其余列（使能/HEX/间隔/内容）保持原样，
+    // 否则用户分不清"这是状态"还是"这是当前发送"。
+    MultiSendTable m;
+    QTableWidget* t = tableOf(m);
+    static const int kIndexCol = 0, kNameCol = 1, kIntervalCol = 4;
+
+    m.setCurrentRow(4);
+
+    for (int col : { kIndexCol, kNameCol }) {
+        QVERIFY(t->item(4, col)->font().bold());
+        QCOMPARE(t->item(4, col)->foreground().style(), Qt::SolidPattern);
+    }
+    QVERIFY(!t->item(4, kIntervalCol)->font().bold());
+    QCOMPARE(t->item(4, kIntervalCol)->foreground().style(), Qt::NoBrush);
+}
+
+void TestMultiSendTable::setCurrentRow_clears_the_row_it_replaces()
+{
+    MultiSendTable m;
+    QTableWidget* t = tableOf(m);
+
+    m.setCurrentRow(4);
+    m.setCurrentRow(9);
+
+    QCOMPARE(t->item(4, 0)->background().style(), Qt::NoBrush);
+    QCOMPARE(t->item(4, 0)->foreground().style(), Qt::NoBrush);
+    QVERIFY(!t->item(4, 0)->font().bold());
+    QCOMPARE(t->item(9, 0)->background().style(), Qt::SolidPattern);
+}
+
+void TestMultiSendTable::setCurrentRow_rejects_a_row_outside_the_table()
+{
+    MultiSendTable m;
+    QTableWidget* t = tableOf(m);
+
+    m.setCurrentRow(4);
+    m.setCurrentRow(9999);      // 越界按"没有当前行"处理，绝不能画到半路
+
+    QCOMPARE(t->item(4, 0)->background().style(), Qt::NoBrush);
+    m.setCurrentRow(-3);
+    QCOMPARE(t->item(4, 0)->background().style(), Qt::NoBrush);
+}
+
+void TestMultiSendTable::highlighting_does_not_emit_itemsEdited()
+{
+    // 这条是整个高亮功能里最容易回归的一处。QTableWidgetItem 的
+    // setBackground/setForeground/setFont 实测每次各发一次 itemChanged
+    // （探针见 build/probe_highlight），而本表 itemChanged 后面接着的是
+    // 300ms 去抖 -> itemsEdited -> MainWindow 换队列快照。
+    // 少一层 QSignalBlocker，循环每发一条就重建一次 99 项快照 ——
+    // 功能上"看不出坏了"，代价是无休止的无用功，而且用户改表与
+    // 循环指示会互相踩到。
+    MultiSendTable m;
+    QTableWidget* t = tableOf(m);
+    QSignalSpy spy(&m, &MultiSendTable::itemsEdited);
+
+    for (int row = 0; row < 6; ++row)
+        m.setCurrentRow(row);
+    m.setCurrentRow(-1);
+    waitOutTheDebounce();
+
+    QCOMPARE(spy.count(), 0);
+    Q_UNUSED(t);
+}
+
+void TestMultiSendTable::setCurrentRow_scrolls_a_row_that_is_out_of_sight()
+{
+    // 99 行的表，视口只有十几行 —— 不滚动的话高亮大半时间在视野外。
+    MultiSendTable m;
+    QTableWidget* t = tableOf(m);
+    m.resize(900, 380);
+    m.show();
+
+    m.setCurrentRow(0);
+    const int before = t->verticalScrollBar()->value();
+    m.setCurrentRow(80);
+    const int after = t->verticalScrollBar()->value();
+
+    QVERIFY(after > before);
+    const QRect r = t->visualItemRect(t->item(80, 0));
+    QVERIFY(t->viewport()->rect().contains(r));
+}
+
+void TestMultiSendTable::setCurrentRow_does_not_scroll_while_a_cell_is_being_edited()
+{
+    // 用户正在第 2 行敲字时，循环滚到第 80 行会把编辑器带出视野。
+    // 实测（build/probe_highlight）编辑中 scrollToItem 照滚不误，
+    // 所以这个守卫是必需的，不是保险。
+    MultiSendTable m;
+    QTableWidget* t = tableOf(m);
+    m.resize(900, 380);
+    m.show();
+
+    static const int kIntervalCol = 4;
+    const QModelIndex idx = t->model()->index(2, kIntervalCol);
+    t->setCurrentIndex(idx);
+    t->edit(idx);
+    QVERIFY(t->viewport()->findChild<QSpinBox*>());
+
+    const int before = t->verticalScrollBar()->value();
+    m.setCurrentRow(80);
+    QCOMPARE(t->verticalScrollBar()->value(), before);
+
+    t->setCurrentCell(0, 0);   // 移开当前格以提交并关掉编辑器
+}
+
+void TestMultiSendTable::status_text_names_the_row_and_its_interval()
+{
+    // 99 行的表里「第 7 行」本身信息量很低，这行字要能直接回答
+    // "发的是什么、多久一次"。
+    MultiSendTable m;
+    QTableWidget* t = tableOf(m);
+    QLabel* status = m.findChild<QLabel*>();
+    QVERIFY(status);
+
+    t->item(6, 1)->setText(QStringLiteral("读状态"));
+    const int ms = 5000;
+    t->item(6, 4)->setData(Qt::UserRole, ms);
+    t->item(6, 4)->setText(QString::number(ms));
+
+    m.setCurrentRow(6);
+
+    const QString text = status->text();
+    QVERIFY2(text.contains(QStringLiteral("07")), qPrintable(text));
+    QVERIFY2(text.contains(QStringLiteral("读状态")), qPrintable(text));
+    QVERIFY2(text.contains(QStringLiteral("5000")), qPrintable(text));
+}
+
+void TestMultiSendTable::status_text_is_cleared_together_with_the_highlight()
+{
+    MultiSendTable m;
+    QTableWidget* t = tableOf(m);
+    QLabel* status = m.findChild<QLabel*>();
+    QVERIFY(status);
+
+    m.setCurrentRow(3);
+    QVERIFY(!status->text().isEmpty());
+    m.setCurrentRow(-1);
+    QVERIFY(status->text().isEmpty());
+    Q_UNUSED(t);
+}
+
+void TestMultiSendTable::single_send_highlights_that_row_then_fades()
+{
+    MultiSendTable m;
+    QTableWidget* t = tableOf(m);
+    static const int kContentCol = 5, kSendCol = 6;
+    m.setSendEnabled(true);
+    t->item(2, kContentCol)->setText(QStringLiteral("AT+HELLO"));
+
+    auto* btn = qobject_cast<QPushButton*>(t->cellWidget(2, kSendCol));
+    QVERIFY(btn);
+    btn->click();
+
+    QCOMPARE(t->item(2, 0)->background().style(), Qt::SolidPattern);
+
+    // kFlashMs 是 900ms；等过它就该自己淡出
+    QTRY_VERIFY_WITH_TIMEOUT(t->item(2, 0)->background().style() == Qt::NoBrush, 3000);
+}
+
+void TestMultiSendTable::fading_single_send_does_not_erase_a_newer_highlight()
+{
+    // 竞态：单发余晖还有 900ms 时，循环已经把指示挪到别的行了。
+    // 若无差别清，正在发送的那行会被擦成"没有当前行" ——
+    // 指示指错比余晖多留一会儿糟得多。
+    MultiSendTable m;
+    QTableWidget* t = tableOf(m);
+    static const int kContentCol = 5, kSendCol = 6;
+    m.setSendEnabled(true);
+    t->item(2, kContentCol)->setText(QStringLiteral("AT+HELLO"));
+
+    auto* btn = qobject_cast<QPushButton*>(t->cellWidget(2, kSendCol));
+    QVERIFY(btn);
+    btn->click();
+    QCOMPARE(t->item(2, 0)->background().style(), Qt::SolidPattern);
+
+    m.setCurrentRow(9);          // 循环走到第 10 行
+    QTest::qWait(1400);          // 让单发的余晖到期
+
+    QCOMPARE(t->item(9, 0)->background().style(), Qt::SolidPattern);
+    QCOMPARE(t->item(2, 0)->background().style(), Qt::NoBrush);
 }
 
 QTEST_MAIN(TestMultiSendTable)

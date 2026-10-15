@@ -8,12 +8,13 @@
 #include <QList>
 #include <QStyledItemDelegate>
 #include <QStyleOptionViewItem>
+#include <QTableWidget>
 
 class QCheckBox;
 class QEvent;
+class QLabel;
 class QPushButton;
 class QSpinBox;
-class QTableWidget;
 class QTimer;
 
 // 内容列的编辑器代理。FR-04-6「内容列回车即提交并发送」靠它实现。
@@ -70,6 +71,29 @@ public:
                               const QModelIndex& index) const override;
 };
 
+// 本表用的表格。只为把「用户正在编辑某格」这件事问出来而存在。
+//
+// Qt 6.12 把 QAbstractItemView::state() 收成了 protected（它返回的
+// State 枚举同样是 protected），同时 editorsAboutToBeShown /
+// editorDestroyed 也不再是公开信号 —— 公开 API 里没有任何查询入口，
+// 而自动滚动必须先回答这个问题：在用户正打字时把视图滚走，
+// 手里的编辑器就没影了。
+//
+// 顺带一个负面结论：焦点代理法（viewport()->isAncestorOf(focusWidget())）
+// 在 offscreen 下**测不出来** —— 窗口从不激活，focusWidget() 恒为 null，
+// 拿它当守卫等于没测。state() 没有这个依赖。
+//
+// 实测见 build/probe_highlight：编辑中读出 3，正是 EditingState
+// （枚举顺序 NoState/DraggingState/DragSelectingState/EditingState/...）。
+class MultiSendTableWidget : public QTableWidget
+{
+public:
+    using QTableWidget::QTableWidget;
+
+    // 语义化出口：子类内部用 protected 的 state()，外部只看这个。
+    bool isEditingCell() const { return state() == QAbstractItemView::EditingState; }
+};
+
 // 多字符串发送表（需求 FR-04）。循环开关是全局的，不在每行上（规格 §3.9）。
 class MultiSendTable : public QGroupBox
 {
@@ -92,6 +116,13 @@ public:
     // 发送编码，与 SendPanel / SendQueueManager 共用，由 MainWindow 同步
     void setTextEncoding(TextEncoding enc);
 
+    // 标出「当前正在发送」的那一行；传 -1 清除。
+    //
+    // 循环发送时由 MainWindow 连 SendQueueManager::rowSent 驱动，停机时
+    // 连 runningChanged(false) 清；单发时本类自己调，随后自动淡出。
+    // 越界下标按"没有当前行"处理，不画到半路。
+    void setCurrentRow(int row);
+
 signals:
     void sendRequested(const QByteArray& data);
     void loopToggled(bool on);
@@ -109,20 +140,34 @@ private slots:
     void onLoopToggled(bool on);
     void onIntervalChanged(int ms);
     void onEditDebounced();
+    void onFlashTimeout();
 
 private:
     void sendRow(int row);
     void scheduleItemsEdited();
+    void paintRow(int row, bool active);
+    void updateStatusText(int row);
+    // 单发反馈：高亮一下再自己淡出。循环正在跑时不走这条路 ——
+    // 循环已经占着高亮，手动插一脚会让指示在长达数秒的间隔里指着错的行。
+    void flashRow(int row);
 
-    QTableWidget*     m_table        = nullptr;
+    MultiSendTableWidget* m_table   = nullptr;
     ContentDelegate*  m_delegate     = nullptr;
     IntervalDelegate* m_intervalDel  = nullptr;
     QCheckBox*        m_loopCheck    = nullptr;
     QSpinBox*         m_intervalSpin = nullptr;
     QPushButton*      m_applyAllBtn  = nullptr;
-    // 单发去抖定时器。构造时建好常驻，只有 itemChanged 会把它重新起算。
+    // 「当前 07/99 · 注释 · 间隔 5000 ms」。颜色告诉你哪一行，
+    // 这行字告诉你那行到底是什么 —— 99 行的表里「第 7 行」本身信息量很低。
+    QLabel*           m_statusLabel  = nullptr;
+    // 单发时的去抖定时器（只做一次性延迟，不是去抖）。常驻，构造时建好。
     QTimer*           m_editDebounce = nullptr;
+    QTimer*           m_flashTimer   = nullptr;
     TextEncoding      m_encoding     = TextEncoding::Utf8;
     // 串口是否已打开。按钮的 enabled 只是给人看的，sendRow() 里还要靠它兜底。
     bool              m_sendEnabled  = false;
+    // 当前高亮行与「正在淡出的是哪一行」。两者分开才能在单发淡出时
+    // 不擦掉循环刚挪过去的指示。
+    int               m_currentRow   = -1;
+    int               m_flashRow     = -1;
 };

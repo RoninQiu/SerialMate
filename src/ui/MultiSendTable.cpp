@@ -2,12 +2,15 @@
 
 #include "core/AppConfigTypes.h"
 #include "core/DataFormatter.h"
+#include "ui/OutgoingAccent.h"
 
 #include <QCheckBox>
 #include <QEvent>
+#include <QFontMetrics>
 #include <QHBoxLayout>
 #include <QHeaderView>
 #include <QKeyEvent>
+#include <QLabel>
 #include <QMessageBox>
 #include <QPushButton>
 #include <QSignalBlocker>
@@ -25,6 +28,14 @@ enum Column { ColIndex = 0, ColName, ColEnabled, ColHex, ColInterval,
 // 每敲一下都会触发。取更短的话用户改一串字符的过程中队列会被换十几次；
 // 取更长的话改完再等一秒多才生效，用户会以为没跟上。
 constexpr int kEditDebounceMs = 300;
+
+// 单发高亮停留多久。够看清一眼，又不至于和下一次操作撞在一起。
+constexpr int kFlashMs = 900;
+
+// 状态行里「注释」最多占多宽像素。注释列本身只有 110px，
+// 这里放宽一点让长注释也能读全，再长就省略号 —— 不然一条长注释
+// 会把「应用到全部」挤到下一行去。
+constexpr int kStatusNamePx = 260;
 }
 
 // ---- IntervalDelegate ----
@@ -111,16 +122,20 @@ bool ContentDelegate::eventFilter(QObject* obj, QEvent* ev)
 
 MultiSendTable::MultiSendTable(QWidget* parent)
     : QGroupBox(tr("多字符串发送"), parent)
-    , m_table(new QTableWidget(kSendItemCount, ColumnCount, this))
+    , m_table(new MultiSendTableWidget(kSendItemCount, ColumnCount, this))
     , m_loopCheck(new QCheckBox(tr("循环发送"), this))
     , m_intervalSpin(new QSpinBox(this))
     , m_editDebounce(new QTimer(this))
+    , m_flashTimer(new QTimer(this))
 {
     // 去抖定时器常驻，只在 itemChanged 时被 restart。放在构造里而不是
     // 第一次编辑时惰性建，省掉一个空指针分支 —— 它是本类唯一的成员定时器。
     m_editDebounce->setSingleShot(true);
     m_editDebounce->setInterval(kEditDebounceMs);
     connect(m_editDebounce, &QTimer::timeout, this, &MultiSendTable::onEditDebounced);
+    m_flashTimer->setSingleShot(true);
+    m_flashTimer->setInterval(kFlashMs);
+    connect(m_flashTimer, &QTimer::timeout, this, &MultiSendTable::onFlashTimeout);
     // 注意：下面建 99×7 个单元格时**还没有**接 itemChanged，要等构造跑完再接。
     // 接早了的话，循环里的 setFlags / setCheckState / setData 都会发 itemChanged，
     // 去抖定时器在**构造期**就上了膛，等面板建好 300ms 后凭空冒一个
@@ -203,6 +218,14 @@ MultiSendTable::MultiSendTable(QWidget* parent)
         button->setFixedWidth(60);
         connect(button, &QPushButton::clicked, this, [this, row] { sendRow(row); });
         m_table->setCellWidget(row, ColSend, button);
+
+        // 「发送」列也留一个空 item。没有它，标「当前发送行」时整条底色带
+        // 会在这一列断掉（截图实测：橙色带止于内容列边缘，右侧留一截白），
+        // 而那一格又没有字可染 —— 断口正好落在"哪一条正在发"的视觉末尾。
+        // 空 item 不给 ItemIsEditable / ItemIsSelectable，delegate 不会去碰它。
+        auto* sendItem = new QTableWidgetItem;
+        sendItem->setFlags(Qt::ItemIsEnabled);
+        m_table->setItem(row, ColSend, sendItem);
     }
 
     m_intervalSpin->setRange(kMinItemIntervalMs, kMaxItemIntervalMs);
@@ -212,6 +235,12 @@ MultiSendTable::MultiSendTable(QWidget* parent)
 
     auto* controls = new QHBoxLayout;
     controls->addWidget(m_loopCheck);
+    // 状态行紧挨着循环开关：它回答的正是"现在在发哪一条"。
+    m_statusLabel = new QLabel(this);
+    m_statusLabel->setTextInteractionFlags(Qt::TextSelectableByMouse);
+    m_statusLabel->setSizePolicy(QSizePolicy::Preferred, QSizePolicy::Preferred);
+    controls->addWidget(m_statusLabel);
+    controls->addSpacing(8);
     // 全局间隔不再直接驱动发送节奏（那是每行自己的事了），
     // 退化成「一键把全部行设成同一个值」，免得 99 行要逐个敲。
     m_applyAllBtn = new QPushButton(tr("应用到全部"), this);
@@ -341,6 +370,116 @@ void MultiSendTable::onIntervalChanged(int ms)
     emit loopIntervalChanged(ms);
 }
 
+void MultiSendTable::setCurrentRow(int row)
+{
+    if (row < 0 || row >= kSendItemCount)
+        row = -1;
+
+    if (row == m_currentRow)
+        return;
+
+    const int old = m_currentRow;
+    m_currentRow = row;
+
+    {
+        // 染色必须挡信号。实测（build/probe_highlight）：QTableWidgetItem 的
+        // setBackground / setForeground / setFont 每调一次都发**一次**
+        // QTableWidget::itemChanged，而本表的 itemChanged 接着就是 300ms 去抖
+        // -> itemsEdited -> MainWindow 换队列快照。循环每条间隔上下 1000ms，
+        // 不挡的话等于每发一条就白白重建一次 99 项快照。
+        const QSignalBlocker blocker(m_table);
+        if (old >= 0)
+            paintRow(old, false);
+        if (row >= 0)
+            paintRow(row, true);
+    }
+
+    updateStatusText(row);
+
+    // 自动滚动。两个守卫缺一不可：
+    //   · EnsureVisible 自带"已经看得见就别动"，实测对可见行是 0->0，
+    //     所以不需要自己算视口；
+    //   · 编辑中必须不滚 —— 实测编辑着的时候 scrollToItem 照滚不误
+    //     （scrollbar 0->55），会把用户手里的编辑器带出视野。
+    if (row >= 0 && !m_table->isEditingCell())
+        m_table->scrollToItem(m_table->item(row, ColIndex), QAbstractItemView::EnsureVisible);
+}
+
+void MultiSendTable::paintRow(int row, bool active)
+{
+    const OutgoingAccent accent = outgoingAccent();
+    for (int col = 0; col < ColumnCount; ++col) {
+        QTableWidgetItem* it = m_table->item(row, col);
+        if (!it)
+            continue;
+
+        // 整行底色 —— 不挑有没有字。SSCOM 只把「注释」列的字体变红，
+        // 注释为空时那一格根本没有字可染，等于什么都没发生。
+        if (active) {
+            it->setBackground(QBrush(accent.soft));
+            // 序号与注释是"这条是谁"的两条标识，给它们加第二通道：
+            // 底色看不见时（低对比度屏、截图转灰度）还有颜色和粗细两个线索。
+            if (col == ColIndex || col == ColName) {
+                it->setForeground(QBrush(accent.text));
+                QFont f = it->font();
+                f.setBold(true);
+                it->setFont(f);
+            }
+        } else {
+            it->setBackground(QBrush());
+            // QFont() 就是本表单元格构造时的初始字体，setFont(QFont()) 是还原
+            // 而不是"清成默认"——清成默认得先知道默认是什么，那就成了第二份真值。
+            if (col == ColIndex || col == ColName) {
+                it->setForeground(QBrush());
+                it->setFont(QFont());
+            }
+        }
+    }
+}
+
+void MultiSendTable::updateStatusText(int row)
+{
+    if (!m_statusLabel)
+        return;
+    if (row < 0) {
+        m_statusLabel->clear();
+        return;
+    }
+
+    // 逐格取，不用 items()：那个函数每次都要重建整个 99 项列表，
+    // 而这里每条指令都会调一次。
+    const QString name = m_table->item(row, ColName)->text();
+    const int ms = m_table->item(row, ColInterval)->data(Qt::UserRole).toInt();
+
+    QString text = tr("当前 %1/%2")
+                       .arg(row + 1, 2, 10, QLatin1Char('0'))
+                       .arg(kSendItemCount);
+    // 注释为空时只留序号和间隔，不要留下「··」这种空档
+    if (!name.isEmpty()) {
+        text += QStringLiteral(" · ")
+              + m_statusLabel->fontMetrics().elidedText(name, Qt::ElideRight, kStatusNamePx);
+    }
+    text += tr(" · 间隔 %1 ms").arg(ms);
+    m_statusLabel->setText(text);
+}
+
+void MultiSendTable::flashRow(int row)
+{
+    m_flashRow = row;
+    setCurrentRow(row);
+    m_flashTimer->start();
+}
+
+void MultiSendTable::onFlashTimeout()
+{
+    // 只清"当初那一行"。循环可能已经把高亮挪到别的行去了，
+    // 无差别清会把正在发送的指示一起擦掉 —— 指示指错的代价，
+    // 比"单发的余晖多留一会儿"大得多。
+    if (m_currentRow == m_flashRow)
+        setCurrentRow(-1);
+    m_flashRow = -1;
+}
+
 void MultiSendTable::sendRow(int row)
 {
     if (row < 0 || row >= kSendItemCount)
@@ -367,6 +506,11 @@ void MultiSendTable::sendRow(int row)
         payload = encodeText(raw, m_encoding);
     }
 
-    if (!payload.isEmpty())
+    if (!payload.isEmpty()) {
+        // 循环没开才做单发反馈：循环正占着高亮，插一脚会让指示在长达数秒的
+        // 间隔里一直指着刚手动发的那行，而不是真正在循环发的那行。
+        if (!loopEnabled())
+            flashRow(row);
         emit sendRequested(payload);
+    }
 }

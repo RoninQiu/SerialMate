@@ -28,6 +28,16 @@ private slots:
     void updateItems_leaves_the_in_flight_interval_alone();
     void updateItems_tolerates_a_shorter_list();
 
+    // ---- rowSent：让表格能标出「当前正在发送」的行 ----
+    // 表格与队列的下标是 1:1 的（m_items 就是表格 99 行的原序快照），
+    // 这组用例守的就是这个映射不被改坏。
+    void rowSent_reports_the_table_row_of_every_send();
+    void rowSent_skips_disabled_rows_without_repeating_a_number();
+    void rowSent_is_not_emitted_for_an_unparsable_hex_row();
+    void rowSent_stops_when_the_manager_stops();
+    void rowSent_keeps_reporting_table_rows_after_updateItems();
+    void rowSent_is_emitted_before_the_payload();
+
 private:
     static QList<SendItem> makeItems(const QStringList& contents, bool hexMode);
     static void invokeTick(SendQueueManager* mgr);
@@ -404,6 +414,117 @@ void TestSendQueueManager::updateItems_tolerates_a_shorter_list()
     QCOMPARE(spy.count(), 3);
     QCOMPARE(spy.at(2).at(0).toByteArray(), QByteArray("ONLY"));
     QVERIFY(mgr.isRunning());
+}
+
+// ---- rowSent：把「正在发第几行」交出去 ----
+
+void TestSendQueueManager::rowSent_reports_the_table_row_of_every_send()
+{
+    SendQueueManager mgr;
+    mgr.setItems(makeItems({QStringLiteral("A"), QStringLiteral("B"),
+                            QStringLiteral("C")}, false));
+    QSignalSpy rowSpy(&mgr, &SendQueueManager::rowSent);
+    QSignalSpy dataSpy(&mgr, &SendQueueManager::sendRequested);
+
+    invokeTick(&mgr);
+    invokeTick(&mgr);
+    invokeTick(&mgr);
+
+    QCOMPARE(rowSpy.count(), 3);
+    QCOMPARE(rowSpy.at(0).at(0).toInt(), 0);
+    QCOMPARE(rowSpy.at(1).at(0).toInt(), 1);
+    QCOMPARE(rowSpy.at(2).at(0).toInt(), 2);
+    // 每次发送都得配一个行号，否则表格会有一格不知道该高亮哪
+    QCOMPARE(dataSpy.count(), rowSpy.count());
+}
+
+void TestSendQueueManager::rowSent_skips_disabled_rows_without_repeating_a_number()
+{
+    QList<SendItem> items = makeItems({QStringLiteral("A"), QStringLiteral("B"),
+                                      QStringLiteral("C")}, false);
+    items[1].enabled = false;
+
+    SendQueueManager mgr;
+    mgr.setItems(items);
+    mgr.setLoopEnabled(true);
+    QSignalSpy rowSpy(&mgr, &SendQueueManager::rowSent);
+
+    for (int i = 0; i < 4; ++i)
+        invokeTick(&mgr);
+
+    QList<int> rows;
+    for (int i = 0; i < rowSpy.count(); ++i)
+        rows << rowSpy.at(i).at(0).toInt();
+    // 第 1 行(0-based)被禁用，报告的行号必须是 0,2,0,2 —— 既不跳号也不重复
+    QCOMPARE(rows, (QList<int>{ 0, 2, 0, 2 }));
+}
+
+void TestSendQueueManager::rowSent_is_not_emitted_for_an_unparsable_hex_row()
+{
+    QList<SendItem> items = makeItems({QStringLiteral("ZZ")}, true);
+    SendQueueManager mgr;
+    mgr.setItems(items);
+    QSignalSpy rowSpy(&mgr, &SendQueueManager::rowSent);
+    QSignalSpy dataSpy(&mgr, &SendQueueManager::sendRequested);
+
+    invokeTick(&mgr);
+
+    // 没发出去就不该报行号：否则表格会高亮一条根本没发送的指令
+    QCOMPARE(dataSpy.count(), 0);
+    QCOMPARE(rowSpy.count(), 0);
+}
+
+void TestSendQueueManager::rowSent_stops_when_the_manager_stops()
+{
+    SendQueueManager mgr;
+    mgr.setItems(makeItems({QStringLiteral("A")}, false));
+    QSignalSpy rowSpy(&mgr, &SendQueueManager::rowSent);
+
+    // start() 只是把定时器设成 0ms，**不会同步发出第一条**；
+    // 这里手动驱动一次，和其它用例保持同一套无时序抖动的写法。
+    mgr.start();
+    invokeTick(&mgr);
+    QCOMPARE(rowSpy.count(), 1);
+
+    mgr.stop();
+    invokeTick(&mgr);
+    QCOMPARE(rowSpy.count(), 1);
+}
+
+void TestSendQueueManager::rowSent_keeps_reporting_table_rows_after_updateItems()
+{
+    SendQueueManager mgr;
+    mgr.setItems(makeItems({QStringLiteral("A"), QStringLiteral("B"),
+                            QStringLiteral("C")}, false));
+    QSignalSpy rowSpy(&mgr, &SendQueueManager::rowSent);
+
+    invokeTick(&mgr);     // 行 0
+    // 循环跑着改表：换了快照但不清进度，行号必须仍按新快照的表格行报
+    mgr.updateItems(makeItems({QStringLiteral("X"), QStringLiteral("Y"),
+                               QStringLiteral("Z")}, false));
+    invokeTick(&mgr);     // 行 1
+    invokeTick(&mgr);     // 行 2
+
+    QCOMPARE(rowSpy.count(), 3);
+    QCOMPARE(rowSpy.at(1).at(0).toInt(), 1);
+    QCOMPARE(rowSpy.at(2).at(0).toInt(), 2);
+}
+
+void TestSendQueueManager::rowSent_is_emitted_before_the_payload()
+{
+    // 顺序不是审美问题：UI 要在数据真的写进串口之前就把高亮摆好，
+    // 否则用户会先看见发送区动了一下、表格才跟上。
+    SendQueueManager mgr;
+    mgr.setItems(makeItems({QStringLiteral("A")}, false));
+
+    QString order;
+    QObject::connect(&mgr, &SendQueueManager::rowSent,
+                     [&order] { order += QStringLiteral("R"); });
+    QObject::connect(&mgr, &SendQueueManager::sendRequested,
+                     [&order](const QByteArray&) { order += QStringLiteral("D"); });
+
+    invokeTick(&mgr);
+    QCOMPARE(order, QStringLiteral("RD"));
 }
 
 QTEST_MAIN(TestSendQueueManager)

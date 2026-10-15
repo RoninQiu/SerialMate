@@ -1,6 +1,7 @@
 #include "ui/DirectionHighlighter.h"
 
 #include "core/DataFormatter.h"
+#include "ui/OutgoingAccent.h"
 
 #include <QApplication>
 #include <QPalette>
@@ -8,16 +9,12 @@
 
 namespace {
 
-struct DirectionColors
-{
-    QColor incoming;
-    QColor outgoing;
-};
-
-// 对比度实测见头文件注释。两套都不能省：应用跟随系统调色板，
-// 用户开深色模式时第一套的深蓝/深橙会糊在深色底上。
-const DirectionColors kOnLight{ QColor(0x00, 0x5F, 0xB8), QColor(0xA3, 0x4A, 0x00) };
-const DirectionColors kOnDark { QColor(0x6C, 0xB6, 0xFF), QColor(0xFF, 0xB7, 0x4D) };
+// 「接收蓝」留在本文件；发送橙已抽到 OutgoingAccent.h，
+// 因为多字符串发送表标「当前正在发送的行」要用同一个语义色。
+// 深浅两套都不能省：应用跟随系统调色板，用户开深色模式时
+// 深蓝会糊在深色底上。对比度实测见头文件注释。
+const QColor kIncomingOnLight = QColor(0x00, 0x5F, 0xB8);
+const QColor kIncomingOnDark  = QColor(0x6C, 0xB6, 0xFF);
 
 } // namespace
 
@@ -31,9 +28,8 @@ void DirectionHighlighter::refreshPalette()
 {
     // 用 Base 而不是 Window 判断底色：接收区是编辑区，底色取自 Base 角色。
     const bool dark = QApplication::palette().color(QPalette::Base).lightness() < 128;
-    const DirectionColors& c = dark ? kOnDark : kOnLight;
-    m_incoming = c.incoming;
-    m_outgoing = c.outgoing;
+    m_incoming = dark ? kIncomingOnDark : kIncomingOnLight;
+    m_outgoing = outgoingAccent().text;
     rehighlight();
 }
 
