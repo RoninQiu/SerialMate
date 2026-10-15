@@ -3,6 +3,9 @@
 // kSendItemCount 定义在这里（MultiSendTable.h 只 include models.h，
 // 是刻意不让 UI 层头文件把 AppConfig 拖进来）。
 #include "core/AppConfigTypes.h"
+// 只有下面那一组"改表 → 队列跟着换"的用例需要它。其余用例不碰这个头，
+// 目的就是让"这个测试目标只测 MultiSendTable 的接线"这件事保持可读。
+#include "core/SendQueueManager.h"
 
 #include <QLineEdit>
 #include <QPushButton>
@@ -44,12 +47,26 @@ private slots:
     void send_is_blocked_while_disabled();
     void set_send_enabled_toggles_the_row_buttons();
 
+    // ---- 改表要发出 itemsEdited，MainWindow 据此换队列快照 ----
+    // 评审发现的缺陷：循环跑着的时候改表，表格上显示一个间隔、
+    // 队列实际按开循环那一刻的旧值发，全程没有任何迹象说明它没跟上。
+    void content_edit_emits_itemsEdited_after_the_debounce();
+    void interval_editor_commit_emits_itemsEdited();
+    void setItems_does_not_emit_itemsEdited();
+    void apply_interval_to_all_emits_itemsEdited();
+    void rapid_edits_collapse_into_a_single_signal();
+    void editing_the_table_changes_what_the_queue_sends();
+
 private:
     static QTableWidget* tableOf(MultiSendTable& m);
     static QSpinBox* openIntervalEditor(QTableWidget* t, int row);
     // 移开当前格是提交编辑器最省事也最接近真实的做法：
     // closeEditor() 是 protected，QTest::keyClick 在这里反而绕过了 delegate 的提交路径。
     static void commitEditor(QTableWidget* t, int row, int col);
+    // 去抖窗口是 300ms（见 MultiSendTable.cpp 的 kEditDebounceMs）。
+    // 等它的同时也给了本进程里其它定时器机会，所以调用前务必确认
+    // 被测对象自己的定时器被推到了不会自己触发的间隔上。
+    static void waitOutTheDebounce() { QTest::qWait(450); }
 };
 
 QTableWidget* TestMultiSendTable::tableOf(MultiSendTable& m)
@@ -288,6 +305,210 @@ void TestMultiSendTable::set_send_enabled_toggles_the_row_buttons()
         auto* btn = qobject_cast<QPushButton*>(t->cellWidget(row, kSendCol));
         QVERIFY(btn->isEnabled());
     }
+}
+
+// ---- 改表 → itemsEdited → 队列快照 ----
+
+void TestMultiSendTable::content_edit_emits_itemsEdited_after_the_debounce()
+{
+    // 「先断后连」：编辑发生的那一刻必须**还没有**信号。
+    // 这条是去抖存在的理由 —— 没有它的话 interval delegate 一次提交写两格、
+    // 内容列每敲一个字符都触发，直接连过去等于每敲一下换一次队列快照。
+    // 只在末尾断言"最终收到 1 个"的话，去掉去抖（改成立即发）一样全绿。
+    MultiSendTable m;
+    QTableWidget* t = tableOf(m);
+    static const int kContentCol = 5;
+    const int row = 3;
+
+    QSignalSpy spy(&m, &MultiSendTable::itemsEdited);
+
+    t->item(row, kContentCol)->setText(QStringLiteral("AT"));
+    QCOMPARE(spy.count(), 0);
+
+    t->item(row, kContentCol)->setText(QStringLiteral("ATS"));
+    QCOMPARE(spy.count(), 0);
+
+    waitOutTheDebounce();
+    QCOMPARE(spy.count(), 1);
+    // 内容确实改了，不是空事件
+    QCOMPARE(m.items().at(row).content, QStringLiteral("ATS"));
+}
+
+void TestMultiSendTable::interval_editor_commit_emits_itemsEdited()
+{
+    // 走的是真实用户路径：打开编辑器 -> 改值 -> 移开提交。
+    // setModelData 里连写 UserRole 与 DisplayRole，所以这里一次提交会发两次
+    // itemChanged —— 去抖必须把它们并成一个信号。
+    MultiSendTable m;
+    QTableWidget* t = tableOf(m);
+    static const int kIntervalCol = 4;
+    const int row = 6;
+
+    QSignalSpy spy(&m, &MultiSendTable::itemsEdited);
+
+    QSpinBox* spin = openIntervalEditor(t, row);
+    QVERIFY(spin);
+    spin->setValue(2500);
+    commitEditor(t, row, kIntervalCol);
+
+    QCOMPARE(spy.count(), 0);      // 还没到去抖窗口
+    waitOutTheDebounce();
+    QCOMPARE(spy.count(), 1);
+    QCOMPARE(m.items().at(row).intervalMs, 2500);
+}
+
+void TestMultiSendTable::setItems_does_not_emit_itemsEdited()
+{
+    // 填表不是"用户改了表"。配置加载时一次写 99 行 × 5 格，
+    // 不挡 itemChanged 的话启动后会凭空冒一个 itemsEdited 出去。
+    MultiSendTable m;
+
+    QList<SendItem> items;
+    for (int i = 0; i < kSendItemCount; ++i) {
+        SendItem it;
+        it.enabled = (i % 2 == 0);
+        it.content = QStringLiteral("ROW%1").arg(i);
+        it.intervalMs = 100 + i;
+        items.append(it);
+    }
+
+    QSignalSpy spy(&m, &MultiSendTable::itemsEdited);
+    m.setItems(items);
+    QCOMPARE(spy.count(), 0);
+
+    waitOutTheDebounce();
+    QCOMPARE(spy.count(), 0);
+
+    // 反面确认：setItems 确实把内容写进去了，"没发信号"不是因为它什么都没做
+    QCOMPARE(m.items().at(4).enabled, true);
+    QCOMPARE(m.items().at(5).enabled, false);
+    QCOMPARE(m.items().at(0).content, QStringLiteral("ROW0"));
+    QCOMPARE(m.items().at(0).intervalMs, 100);
+}
+
+void TestMultiSendTable::apply_interval_to_all_emits_itemsEdited()
+{
+    // 「应用到全部」改了 99 行的间隔，必须通知出去。
+    // 它是整条路径上唯一一次改动量超过 99×2 格的批量操作，
+    // 漏掉的话用户点完按钮，循环还在按 99 个旧间隔发。
+    MultiSendTable m;
+
+    // 找到「全部间隔」输入框：它是 QGroupBox 的直接子控件。
+    // 必须按父对象区分 —— 表格的间隔列虽然也是 QSpinBox，但那是
+    // IntervalDelegate 在编辑时才现造的，挂在 viewport 上且此处还没造。
+    QSpinBox* globalSpin = nullptr;
+    for (QSpinBox* s : m.findChildren<QSpinBox*>()) {
+        if (s->parent() == &m) {
+            globalSpin = s;
+            break;
+        }
+    }
+    QVERIFY(globalSpin);
+    QCOMPARE(globalSpin->value(), kDefaultItemIntervalMs);
+
+    QSignalSpy spy(&m, &MultiSendTable::itemsEdited);
+
+    globalSpin->setValue(1234);
+    QCOMPARE(spy.count(), 0);
+    m.applyIntervalToAll();
+
+    QCOMPARE(spy.count(), 0);
+    waitOutTheDebounce();
+    QCOMPARE(spy.count(), 1);
+    QCOMPARE(m.items().at(0).intervalMs, 1234);
+    QCOMPARE(m.items().at(kSendItemCount - 1).intervalMs, 1234);
+}
+
+void TestMultiSendTable::rapid_edits_collapse_into_a_single_signal()
+{
+    MultiSendTable m;
+    QTableWidget* t = tableOf(m);
+    static const int kEnabledCol = 2;
+    static const int kContentCol = 5;
+
+    QSignalSpy spy(&m, &MultiSendTable::itemsEdited);
+
+    // 模拟用户连着敲一串内容 + 反复勾选
+    for (int i = 0; i < 10; ++i)
+        t->item(0, kContentCol)->setText(QStringLiteral("SEQ%1").arg(i));
+    for (int i = 0; i < 5; ++i)
+        t->item(0, kEnabledCol)->setCheckState(i % 2 ? Qt::Checked : Qt::Unchecked);
+
+    waitOutTheDebounce();
+    QCOMPARE(spy.count(), 1);
+    QCOMPARE(m.items().at(0).content, QStringLiteral("SEQ9"));
+    // 勾了 5 次，最后一次 i=4 是偶数 -> 未勾选。写这个断言时先算一遍，
+    // 别照着循环体想当然写 true。
+    QCOMPARE(m.items().at(0).enabled, false);
+}
+
+void TestMultiSendTable::editing_the_table_changes_what_the_queue_sends()
+{
+    // 这一条是上面那一整组缺陷的**用户可见症状**，也是唯一一条同时
+    // 穿过 MultiSendTable 和 SendQueueManager 两个类的用例。
+    // 按 MainWindow 里的原样连线（含 loopToggled 那条 setItems）搭起来，
+    // 验证"改表 → 队列换快照 → 下一条按新的发"。
+    //
+    // 刻意**不**调 queue.start()：它会 m_timer->start(0)，而下面为了等去抖
+    // 必须转事件循环，那个 0ms 定时器会在等待期间自己触发、抢先发出一条，
+    // 把 spy 的计数搅乱。手动 invokeMethod(onTick) 才是不依赖真实计时的做法。
+    MultiSendTable m;
+    QTableWidget* t = tableOf(m);
+    static const int kEnabledCol = 2;
+    static const int kContentCol = 5;
+    static const int kIntervalCol = 4;
+
+    const int rowA = 0;
+    const int rowB = 1;
+    t->item(rowA, kEnabledCol)->setCheckState(Qt::Checked);
+    t->item(rowB, kEnabledCol)->setCheckState(Qt::Checked);
+    t->item(rowA, kContentCol)->setText(QStringLiteral("KEEP"));
+    t->item(rowB, kContentCol)->setText(QStringLiteral("OLD"));
+    // 把真正会自己触发的定时器推到 10 分钟，测试期间它绝不会自己响。
+    // 这一条是上面那个"不调 start()"的前提条件，缺了它用例本身就是假的。
+    t->item(rowA, kIntervalCol)->setData(Qt::UserRole, kMaxItemIntervalMs);
+    t->item(rowA, kIntervalCol)->setText(QString::number(kMaxItemIntervalMs));
+
+    SendQueueManager queue;
+    // 与 MainWindow::wireSignals 里完全相同的两条连线
+    QObject::connect(&m, &MultiSendTable::loopToggled, &queue, [&](bool on) {
+        queue.setItems(m.items());
+        queue.setLoopEnabled(on);
+        if (on)
+            queue.start();
+        else
+            queue.stop();
+    });
+    QObject::connect(&m, &MultiSendTable::itemsEdited, &queue, [&] {
+        queue.updateItems(m.items());
+    });
+
+    queue.setItems(m.items());
+    queue.setLoopEnabled(true);
+
+    QSignalSpy sendSpy(&queue, &SendQueueManager::sendRequested);
+    QSignalSpy editSpy(&m, &MultiSendTable::itemsEdited);
+
+    auto tick = [&] {
+        QVERIFY(QMetaObject::invokeMethod(&queue, "onTick", Qt::DirectConnection));
+    };
+
+    tick();
+    QCOMPARE(sendSpy.count(), 1);
+    QCOMPARE(sendSpy.at(0).at(0).toByteArray(), QByteArray("KEEP"));
+    QCOMPARE(queue.pendingIntervalMs(), kMaxItemIntervalMs);
+
+    // 用户改了第 2 行的内容
+    t->item(rowB, kContentCol)->setText(QStringLiteral("NEW"));
+    waitOutTheDebounce();
+    QCOMPARE(editSpy.count(), 1);
+    QCOMPARE(sendSpy.count(), 1);        // 等待期间没有多发 —— 定时器确实被推远了
+
+    tick();
+    QCOMPARE(sendSpy.count(), 2);
+    // 队列跟上了：发的是改过的内容。
+    // 若 updateItems 退化成 setItems（m_index 清零），这里会是 "KEEP"。
+    QCOMPARE(sendSpy.at(1).at(0).toByteArray(), QByteArray("NEW"));
 }
 
 QTEST_MAIN(TestMultiSendTable)

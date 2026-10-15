@@ -22,6 +22,12 @@ private slots:
     void tick_stops_when_all_disabled_and_loop_off();
     void tick_keeps_running_when_all_disabled_and_loop_on();
 
+    // ---- updateItems：循环跑着的时候改表（2026-10-15 评审缺陷）----
+    void updateItems_changes_what_gets_sent_next();
+    void updateItems_does_not_restart_the_cycle();
+    void updateItems_leaves_the_in_flight_interval_alone();
+    void updateItems_tolerates_a_shorter_list();
+
 private:
     static QList<SendItem> makeItems(const QStringList& contents, bool hexMode);
     static void invokeTick(SendQueueManager* mgr);
@@ -281,6 +287,123 @@ void TestSendQueueManager::tick_keeps_running_when_all_disabled_and_loop_on()
     QVERIFY(mgr.isRunning());
     QCOMPARE(sendSpy.count(), 0);
     QCOMPARE(mgr.pendingIntervalMs(), kDefaultItemIntervalMs);
+}
+
+// ---- updateItems：循环跑着的时候改表 ----
+//
+// 评审发现的缺陷：MainWindow 只在 loopToggled 和 applyConfig 两处调 setItems()，
+// 而 setItems() 会把 m_index 清零 —— 于是循环开着的时候，表格上显示的间隔
+// 和队列实际用的间隔是两套值，而且没有任何迹象说明后者没跟上。
+// 用户唯一的察觉方式是"循环怎么不听我的"。
+//
+// updateItems 是同一个换快照的动作，但刻意保留 m_index。下面的用例必须
+// 同时钉住两件事：换了（跟着走）和没重置（不从头来）—— 只测前者的话，
+// 把 updateItems 直接实现成 setItems 一样会全绿。
+
+void TestSendQueueManager::updateItems_changes_what_gets_sent_next()
+{
+    SendQueueManager mgr;
+    mgr.setLoopEnabled(true);
+    mgr.setItems(makeItems({QStringLiteral("A"), QStringLiteral("B"),
+                             QStringLiteral("C")}, false));
+    mgr.start();
+
+    QSignalSpy spy(&mgr, &SendQueueManager::sendRequested);
+    invokeTick(&mgr);   // A，index -> 1
+    invokeTick(&mgr);   // B，index -> 2
+    QCOMPARE(spy.count(), 2);
+
+    // 用户把第 3 行的内容改了
+    QList<SendItem> edited = makeItems({QStringLiteral("A"), QStringLiteral("B"),
+                                        QStringLiteral("C-EDITED")}, false);
+    mgr.updateItems(edited);
+
+    invokeTick(&mgr);
+    QCOMPARE(spy.count(), 3);
+    QCOMPARE(spy.at(2).at(0).toByteArray(), QByteArray("C-EDITED"));
+}
+
+void TestSendQueueManager::updateItems_does_not_restart_the_cycle()
+{
+    // 这条是 updateItems 与 setItems 的**唯一区别**，必须单独钉：
+    // 若实现里顺手写了 m_index = 0，下面第 3 次 tick 发出来的会是 A 而不是 C。
+    SendQueueManager mgr;
+    mgr.setLoopEnabled(true);
+    mgr.setItems(makeItems({QStringLiteral("A"), QStringLiteral("B"),
+                             QStringLiteral("C")}, false));
+    mgr.start();
+
+    QSignalSpy spy(&mgr, &SendQueueManager::sendRequested);
+    invokeTick(&mgr);   // A
+    invokeTick(&mgr);   // B
+    QCOMPARE(spy.count(), 2);
+
+    // 改的是**已经发过**的那一行。若进度被清零，下一条又轮到 A。
+    mgr.updateItems(makeItems({QStringLiteral("A-EDITED"), QStringLiteral("B"),
+                                QStringLiteral("C")}, false));
+
+    invokeTick(&mgr);
+    QCOMPARE(spy.count(), 3);
+    QCOMPARE(spy.at(2).at(0).toByteArray(), QByteArray("C"));
+}
+
+void TestSendQueueManager::updateItems_leaves_the_in_flight_interval_alone()
+{
+    // 改表不该改写"正在走的那一步"：QTimer 的等待在 emit sendRequested 时
+    // 就定死了。这里同时钉住两侧 —— 改之前发出去的那次仍按旧值等，
+    // 该行下次轮到它时才用新值。
+    SendQueueManager mgr;
+    mgr.setLoopEnabled(true);
+    QList<SendItem> items = makeItems({QStringLiteral("A"), QStringLiteral("B")}, false);
+    items[0].intervalMs = 1111;
+    items[1].intervalMs = 2222;
+    mgr.setItems(items);
+    mgr.start();
+
+    QSignalSpy spy(&mgr, &SendQueueManager::sendRequested);
+    invokeTick(&mgr);                 // 发 A，按 A 当时的 1111 等
+    QCOMPARE(mgr.pendingIntervalMs(), 1111);
+
+    QList<SendItem> edited = items;
+    edited[0].intervalMs = 3333;
+    mgr.updateItems(edited);
+
+    // 正在进行的那一次不被追溯改写
+    QCOMPARE(mgr.pendingIntervalMs(), 1111);
+
+    invokeTick(&mgr);                 // 发 B
+    invokeTick(&mgr);                 // 回绕，再发 A —— 这次用新值
+    QCOMPARE(spy.count(), 3);
+    QCOMPARE(mgr.pendingIntervalMs(), 3333);
+}
+
+void TestSendQueueManager::updateItems_tolerates_a_shorter_list()
+{
+    // MultiSendTable::items() 恒返回 99 行，所以界面上碰不到列表变短；
+    // 但 updateItems 是公开 API，越界后队列仍必须可用 —— 否则会读到
+    // 列表范围外或者干脆停摆。
+    //
+    // 守的是**行为**而不是某一行实现：这里刻意不去钉 "updateItems 有没有
+    // 夹 m_index"。夹了和不夹在这里表现完全一样（onTick 开头的
+    // `m_index >= n` 本来就回绕），既然区分不了，钉它就是给一条假断言。
+    SendQueueManager mgr;
+    mgr.setLoopEnabled(true);
+    mgr.setItems(makeItems({QStringLiteral("A"), QStringLiteral("B"),
+                             QStringLiteral("C")}, false));
+    mgr.start();
+
+    QSignalSpy spy(&mgr, &SendQueueManager::sendRequested);
+    invokeTick(&mgr);   // A
+    invokeTick(&mgr);   // B，index = 2，已经越过了新列表的长度
+    QCOMPARE(spy.count(), 2);
+
+    mgr.updateItems(makeItems({QStringLiteral("ONLY")}, false));
+
+    // 不崩、不越界、循环继续：新列表的第一条被发出
+    invokeTick(&mgr);
+    QCOMPARE(spy.count(), 3);
+    QCOMPARE(spy.at(2).at(0).toByteArray(), QByteArray("ONLY"));
+    QVERIFY(mgr.isRunning());
 }
 
 QTEST_MAIN(TestSendQueueManager)

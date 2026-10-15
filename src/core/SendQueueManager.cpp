@@ -16,6 +16,26 @@ void SendQueueManager::setItems(const QList<SendItem>& items)
     m_index = 0;
 }
 
+void SendQueueManager::updateItems(const QList<SendItem>& items)
+{
+    m_items = items;
+    // 刻意不动 m_index：改表不是"重新开始一轮"。
+    // 若在这里清零，循环正跑到第 40 行时用户改一下第 5 行的间隔，
+    // 序号靠前的那些高频读指令会把后面整轮指令重新推一遍 ——
+    // 用户改个间隔的观感就是"循环卡住 / 重启了"，比不跟随还糟。
+    //
+    // 已经发出去的那一条也不受影响：它在 emit sendRequested 时就把
+    // QTimer 的等待定死了，改动从这一行**下次轮到它**开始生效。
+    // 这正是期望的语义 —— 正在走的那一步不该被中途改写。
+    //
+    // 刻意不夹 m_index：列表变短后越界时，onTick 开头的 `m_index >= n`
+    // 已经处理了（回绕或收尾），再加一次夹取是同一件事写两遍，
+    // 而且没有任何一条断言能把它和"没夹"区分开 —— 不可观测的防御代码
+    // 只会慢慢变成没人敢删的遗产。
+    // （对应用例 updateItems_tolerates_a_shorter_list 守的是行为：
+    //  变短之后不崩、循环不停、发出去的是新列表的内容。）
+}
+
 void SendQueueManager::setLoopEnabled(bool on)
 {
     m_loopOn = on;

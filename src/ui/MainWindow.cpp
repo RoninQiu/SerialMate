@@ -441,7 +441,16 @@ void MainWindow::wireSignals()
         else
             m_queue->stop();
     });
-    // (itemsEdited 连线属于下一个提交，暂不在此)
+    // 循环跑着的时候改表，队列里的快照必须跟着换。
+    // 少了这条：用户在第 5 行把间隔从 1000 改成 100，表格上白纸黑字写着 100，
+    // 实际仍然每 1000ms 发一次，而且没有任何迹象说明它没跟上 ——
+    // 唯一能察觉的是"循环怎么不听我的"。
+    //
+    // 用 updateItems 而不是 setItems：后者会把进度清零从头再来一遍，
+    // 用户改个间隔的观感反而是"循环重启了"，比不跟随更糟。
+    connect(m_multiTable, &MultiSendTable::itemsEdited, this, [this] {
+        m_queue->updateItems(m_multiTable->items());
+    });
     // 循环发送的节奏改由每行自己的「间隔」列决定，队列不再接受全局间隔，
     // 所以这里没有 loopIntervalChanged -> setInterval 这条连线了。
     // 「全部间隔」输入框只是「应用到全部」的来源，改它不必通知队列。

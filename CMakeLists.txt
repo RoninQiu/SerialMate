@@ -158,6 +158,11 @@ qt_add_executable(tst_multisendtable
     src/core/DataFormatter.cpp
     src/core/TextCodec.h
     src/core/TextCodec.cpp
+    # SendQueueManager：只有"改表 → 队列换快照"那组用例需要它。
+    # 那是本次修复的用户可见症状所在，跨类接线必须有个能同时穿过两个类的用例，
+    # 否则又回到"两端各自全绿、中间的连线没人验"的老问题。
+    src/core/SendQueueManager.h
+    src/core/SendQueueManager.cpp
 )
 target_include_directories(tst_multisendtable PRIVATE src)
 # Qt6::Widgets：这是第一个真正建控件的测试目标，QTEST_MAIN 因此展开成 QApplication

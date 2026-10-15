@@ -10,13 +10,21 @@
 #include <QKeyEvent>
 #include <QMessageBox>
 #include <QPushButton>
+#include <QSignalBlocker>
 #include <QSpinBox>
 #include <QTableWidget>
+#include <QTimer>
 #include <QVBoxLayout>
 
 namespace {
 enum Column { ColIndex = 0, ColName, ColEnabled, ColHex, ColInterval,
               ColContent, ColSend, ColumnCount };
+
+// 改表到「队列快照跟着换」之间的等待。取 300ms 是为了盖住一次连续操作：
+// 「应用到全部」要写 99×2 格、间隔列一次提交写两格、内容列敲一串字符
+// 每敲一下都会触发。取更短的话用户改一串字符的过程中队列会被换十几次；
+// 取更长的话改完再等一秒多才生效，用户会以为没跟上。
+constexpr int kEditDebounceMs = 300;
 }
 
 // ---- IntervalDelegate ----
@@ -106,7 +114,18 @@ MultiSendTable::MultiSendTable(QWidget* parent)
     , m_table(new QTableWidget(kSendItemCount, ColumnCount, this))
     , m_loopCheck(new QCheckBox(tr("循环发送"), this))
     , m_intervalSpin(new QSpinBox(this))
+    , m_editDebounce(new QTimer(this))
 {
+    // 去抖定时器常驻，只在 itemChanged 时被 restart。放在构造里而不是
+    // 第一次编辑时惰性建，省掉一个空指针分支 —— 它是本类唯一的成员定时器。
+    m_editDebounce->setSingleShot(true);
+    m_editDebounce->setInterval(kEditDebounceMs);
+    connect(m_editDebounce, &QTimer::timeout, this, &MultiSendTable::onEditDebounced);
+    // 注意：下面建 99×7 个单元格时**还没有**接 itemChanged，要等构造跑完再接。
+    // 接早了的话，循环里的 setFlags / setCheckState / setData 都会发 itemChanged，
+    // 去抖定时器在**构造期**就上了膛，等面板建好 300ms 后凭空冒一个
+    // itemsEdited 出去 —— 那不是任何人的编辑，而且它会在 MainWindow
+    // 还没连好线的时候就去动队列快照。
     m_table->setHorizontalHeaderLabels(
         { tr("序号"), tr("注释"), tr("使能"), tr("HEX"), tr("间隔"),
           tr("内容"), tr("发送") });
@@ -210,6 +229,13 @@ MultiSendTable::MultiSendTable(QWidget* parent)
 
     connect(m_loopCheck, &QCheckBox::toggled, this, &MultiSendTable::onLoopToggled);
     connect(m_intervalSpin, &QSpinBox::valueChanged, this, &MultiSendTable::onIntervalChanged);
+
+    // 构造跑完了才接 —— 理由见上面那处注释。
+    // itemChanged 覆盖了用户能改的全部 5 列（内容/注释/使能/HEX/间隔）：
+    // 文本列走 setText/setData，勾选列走 setCheckState，间隔列由
+    // IntervalDelegate 写 UserRole 与 DisplayRole —— 三条路都收在
+    // QTableWidget::setData 里，统一发这一个信号。
+    connect(m_table, &QTableWidget::itemChanged, this, &MultiSendTable::scheduleItemsEdited);
 }
 
 QList<SendItem> MultiSendTable::items() const
@@ -230,6 +256,11 @@ QList<SendItem> MultiSendTable::items() const
 
 void MultiSendTable::setItems(const QList<SendItem>& items)
 {
+    // 堵住 QTableWidget 的信号：填表不是"用户改了表"。
+    // 配置加载时这里一次写 99 行 × 5 格，不挡的话每格都起一次去抖定时器，
+    // 启动 ~100ms 后照样发一个 itemsEdited() 出去 —— 那是个凭空捏造的
+    // "编辑事件"，而且它会在 MainWindow 还没连好线的时候就去换队列快照。
+    const QSignalBlocker blocker(m_table);
     for (int row = 0; row < kSendItemCount && row < items.size(); ++row) {
         const SendItem& it = items.at(row);
         m_table->item(row, ColEnabled)->setCheckState(it.enabled ? Qt::Checked : Qt::Unchecked);
@@ -260,6 +291,22 @@ void MultiSendTable::applyIntervalToAll()
         m_table->item(row, ColInterval)->setData(Qt::UserRole, ms);
         m_table->item(row, ColInterval)->setText(QString::number(ms));
     }
+    // 上面逐格 setData 已经发过 99×2 次 itemChanged，去抖定时器自然被
+    // restart 成只差最后一次。这里再显式起一次，是把"用户点了这个按钮"
+    // 这件事本身也纳入去抖 —— 万一将来加了不写单元格的批量路径，
+    // 不会因为漏掉这一行而静默不跟随。
+    scheduleItemsEdited();
+}
+
+void MultiSendTable::scheduleItemsEdited()
+{
+    // restart 而非 start：连续编辑只会在最后一次编辑后触发一次。
+    m_editDebounce->start();
+}
+
+void MultiSendTable::onEditDebounced()
+{
+    emit itemsEdited();
 }
 
 void MultiSendTable::stopLoop()

@@ -14,6 +14,7 @@ class QEvent;
 class QPushButton;
 class QSpinBox;
 class QTableWidget;
+class QTimer;
 
 // 内容列的编辑器代理。FR-04-6「内容列回车即提交并发送」靠它实现。
 //
@@ -95,13 +96,23 @@ signals:
     void sendRequested(const QByteArray& data);
     void loopToggled(bool on);
     void loopIntervalChanged(int ms);
+    // 表里的条目被用户改动了（内容/注释/使能/HEX/间隔任一），或点了「应用到全部」。
+    // MainWindow 据此把 SendQueueManager 里的快照换成新的 —— 否则循环会一直按
+    // 「开循环那一刻」的值发，表格上显示一个间隔、实际发出去是另一个。
+    //
+    // 这是**去抖之后**的单发信号，不是每次单元格变化都发一次：
+    // 间隔列的 delegate 一次提交就写 UserRole + DisplayRole 两格，
+    // 内容列每敲一个字符也都会触发，直接连过去等于每敲一下就重建一次队列。
+    void itemsEdited();
 
 private slots:
     void onLoopToggled(bool on);
     void onIntervalChanged(int ms);
+    void onEditDebounced();
 
 private:
     void sendRow(int row);
+    void scheduleItemsEdited();
 
     QTableWidget*     m_table        = nullptr;
     ContentDelegate*  m_delegate     = nullptr;
@@ -109,6 +120,8 @@ private:
     QCheckBox*        m_loopCheck    = nullptr;
     QSpinBox*         m_intervalSpin = nullptr;
     QPushButton*      m_applyAllBtn  = nullptr;
+    // 单发去抖定时器。构造时建好常驻，只有 itemChanged 会把它重新起算。
+    QTimer*           m_editDebounce = nullptr;
     TextEncoding      m_encoding     = TextEncoding::Utf8;
     // 串口是否已打开。按钮的 enabled 只是给人看的，sendRow() 里还要靠它兜底。
     bool              m_sendEnabled  = false;

@@ -22,6 +22,9 @@ public:
     explicit SendQueueManager(QObject* parent = nullptr);
 
     void setItems(const QList<SendItem>& items);
+    // 换掉快照但**保留当前进度**。给"循环跑着的时候用户改了表"用 ——
+    // 见实现处为什么不能直接调 setItems。
+    void updateItems(const QList<SendItem>& items);
     void setLoopEnabled(bool on);
     void setTextEncoding(TextEncoding enc);   // 文本模式的编码，默认 UTF-8
     void start();
