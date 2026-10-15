@@ -6,6 +6,14 @@ set(CMAKE_CXX_STANDARD_REQUIRED ON)
 set(CMAKE_AUTOMOC ON)
 set(CMAKE_AUTOUIC OFF)
 
+# 编辑器跳转（VS Code C/C++、clangd）靠编译数据库还原真实编译参数。
+# Qt 6.12 的头文件散在 include 下的 122 个模块目录里，手工配 includePath 既要
+# 逐层补路径，也拿不到 -std=c++17 和 QT_WIDGETS_LIB 这类 -D 宏，AUTOMOC 的
+# Q_OBJECT / signals 展开随之出错。
+# Ninja / Makefile 生成器下产出 build/compile_commands.json；Visual Studio
+# 生成器自己出 .vcxproj 并忽略此变量，CI 用 Ninja，所以两边都不受影响。
+set(CMAKE_EXPORT_COMPILE_COMMANDS ON)
+
 find_package(Qt6 6.5 REQUIRED COMPONENTS Widgets SerialPort Test)
 
 if(MSVC)
@@ -139,3 +147,21 @@ target_include_directories(tst_configmanager PRIVATE src)
 # 不需要 QtGui：这个测试走 QTEST_MAIN 的 QCoreApplication 分支，不碰 QFont。
 target_link_libraries(tst_configmanager PRIVATE Qt6::Test Qt6::SerialPort)
 add_test(NAME configmanager COMMAND tst_configmanager)
+
+qt_add_executable(tst_multisendtable
+    tests/tst_multisendtable.cpp
+    src/ui/MultiSendTable.h
+    src/ui/MultiSendTable.cpp
+    src/ui/WrapLayout.h
+    src/ui/WrapLayout.cpp
+    src/core/DataFormatter.h
+    src/core/DataFormatter.cpp
+    src/core/TextCodec.h
+    src/core/TextCodec.cpp
+)
+target_include_directories(tst_multisendtable PRIVATE src)
+# Qt6::Widgets：这是第一个真正建控件的测试目标，QTEST_MAIN 因此展开成 QApplication
+# 而不是 QCoreApplication（由 QT_WIDGETS_LIB 决定）。CI 已全局设 QT_QPA_PLATFORM=offscreen，
+# 本机有桌面会话时直接跑真实平台插件，与其余四个测试目标保持同一套行为。
+target_link_libraries(tst_multisendtable PRIVATE Qt6::Test Qt6::Widgets Qt6::SerialPort)
+add_test(NAME multisendtable COMMAND tst_multisendtable)

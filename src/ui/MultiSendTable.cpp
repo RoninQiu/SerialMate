@@ -165,9 +165,19 @@ MultiSendTable::MultiSendTable(QWidget* parent)
         QTableWidgetItem* intervalItem = new QTableWidgetItem(
             QString::number(kDefaultItemIntervalMs));
         intervalItem->setData(Qt::UserRole, kDefaultItemIntervalMs);
-        // 间隔列只接受 delegate 写入，不允许就地敲键盘改 ——
-        // 允许的话会出现"显示 500、实际 UserRole 还是 1000"的错位。
-        intervalItem->setFlags(Qt::ItemIsEnabled | Qt::ItemIsSelectable);
+        // 必须带 ItemIsEditable：QAbstractItemView::edit() 在向 delegate 要编辑器
+        // **之前**先查这个标志，与用哪个 delegate 无关。缺了它，IntervalDelegate
+        // 那 40 行整段成为死代码（Qt 自己会打一行
+        // "qt.widgets.abstractitemview: edit: editing failed"，但界面上什么都不发生），
+        // 逐条间隔在程序内根本设不了 —— 唯一入口只剩底部「应用到全部」，
+        // 而它把 99 行全设成同一个值。
+        //
+        // 原先这里只给 ItemIsEnabled|ItemIsSelectable，理由写的是"不允许就地敲键盘，
+        // 否则会显示 500、实际 UserRole 还是 1000"。这个担心对 delegate 来说不成立：
+        // 本列已用 setItemDelegateForColumn 绑了 IntervalDelegate，提交必经
+        // setModelData()，它同时写 UserRole（真值）与 DisplayRole（显示文本）。
+        // 真正会错位的是没有 delegate 的裸单元格，而这里不是那种情况。
+        intervalItem->setFlags(Qt::ItemIsEnabled | Qt::ItemIsSelectable | Qt::ItemIsEditable);
         m_table->setItem(row, ColInterval, intervalItem);
 
         QPushButton* button = new QPushButton(tr("发送"), m_table);
