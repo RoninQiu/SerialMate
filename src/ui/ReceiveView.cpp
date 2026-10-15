@@ -1,6 +1,7 @@
 #include "ui/ReceiveView.h"
 
 #include "core/SerialPortManager.h"
+#include "core/TextCodec.h"
 #include "ui/DirectionHighlighter.h"
 #include "ui/WrapLayout.h"
 
@@ -148,6 +149,18 @@ ReceiveView::ReceiveView(QWidget* parent)
         m_text->setLineWrapMode(on ? QPlainTextEdit::WidgetWidth : QPlainTextEdit::NoWrap);
     });
 
+    // 换编码时清掉上一批残留的半个字符：那个边界是按旧编码切出来的。
+    // setTextEncoding() 里也清了一次，那是 MainWindow 加载配置时走的路径；
+    // 这里是用户在界面上直接改下拉框走的路径 —— 两条路都得清。
+    connect(m_encCombo, &QComboBox::currentIndexChanged, this, [this](int) {
+        m_partial.clear();
+    });
+
+    // 切 HEX 也要清：HEX 是逐字节显示的，没有"半个字符"，留着的尾巴会变成错位的字节。
+    connect(m_hexCheck, &QCheckBox::toggled, this, [this](bool) {
+        m_partial.clear();
+    });
+
     // FR-02-10 右键菜单：复制 / 清空 / 保存 / 暂停
     m_text->setContextMenuPolicy(Qt::CustomContextMenu);
     connect(m_text, &QWidget::customContextMenuRequested, this, [this](const QPoint& pos) {
@@ -199,6 +212,8 @@ DataFormatter::DisplayOptions ReceiveView::displayOptions(
 
 void ReceiveView::setTextEncoding(TextEncoding enc)
 {
+    // 换编码后上一批残留的半个字符不再有意义：那是按旧编码切出来的边界。
+    m_partial.clear();
     const int idx = m_encCombo->findData(textEncodingToInt(enc));
     if (idx >= 0 && m_encCombo->currentIndex() != idx) {
         const QSignalBlocker blocker(m_encCombo);
@@ -233,14 +248,32 @@ void ReceiveView::onFlush()
     // MSVC /W4 下窄化会报 C4244
     emit chunkReceived(static_cast<int>(data.size()));
 
-    if (isPaused())
+    if (isPaused()) {
+        // 暂停期间这批数据不显示，残留的半个字符也一并丢掉：恢复后接上来的是
+        // 全新的数据，把旧尾巴拼上去只会凭空多一个错字。
+        m_partial.clear();
         return;
+    }
 
     // 方向标记 ← ：设备 -> 本机。与发送那条是**两次独立 append**（这里是 40ms
     // 定时器，发送那边是 sendCompleted 信号），所以一批数据里不会混着两种方向，
     // 行首标记永远只描述这一整段。
-    appendText(DataFormatter::formatChunk(
-        data, displayOptions(DataFormatter::Direction::Incoming)));
+    const DataFormatter::DisplayOptions opt =
+        displayOptions(DataFormatter::Direction::Incoming);
+
+    QByteArray payload = data;
+    if (opt.hexMode) {
+        // HEX 是逐字节显示的，没有"半个字符"，残留的尾巴清掉即可
+        m_partial.clear();
+    } else {
+        // 多字节字符会被 40ms 的批次边界劈开。单独解码这一批，落在边界中间的
+        // UTF-8 汉字会变成两个 U+FFFD（实测一个汉字能炸成 3 个替换符），
+        // 连续流下几乎每几批就命中一次。这里把上一批的尾巴接在开头，
+        // 只把完整的那段交给解码，剩下的留给下一批。
+        payload = takeCompletePrefix(&m_partial, data, opt.encoding);
+    }
+
+    appendText(DataFormatter::formatChunk(payload, opt));
 }
 
 void ReceiveView::appendSent(const QByteArray& data)
@@ -332,6 +365,8 @@ qsizetype ReceiveView::bufferLimit() const
 void ReceiveView::clearText()
 {
     m_text->clear();
+    // 屏幕已经清空，残留的半个字符再接回新数据只会凭空多一个错字。
+    m_partial.clear();
 }
 
 void ReceiveView::stopFlush()

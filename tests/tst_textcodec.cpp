@@ -21,7 +21,128 @@ private slots:
     void encoding_int_roundtrip();
     void encoding_int_out_of_range_falls_back();
     void empty_input();
+
+    // 分块解码：串口按 40ms 批次送数据，批次边界与字符边界无关
+    void utf8_tail_keeps_only_incomplete_sequences();
+    void utf8_tail_is_zero_for_complete_text();
+    void gbk_tail_keeps_a_lone_lead_byte();
+    void latin1_never_has_a_tail();
+    void take_prefix_carries_the_tail_over();
+    void take_prefix_is_transparent_for_latin1();
+    void split_stream_reassembles_to_the_original_text();
 };
+
+void TestTextCodec::utf8_tail_keeps_only_incomplete_sequences()
+{
+    // 「温」= E6 B8 A9。从末尾往前找最多 3 步找首字节，按首字节算出该序列有多长。
+    const QByteArray wen = QStringLiteral("温").toUtf8();
+    QCOMPARE(wen.size(), 3);
+
+    QCOMPARE(incompleteTailBytes(wen.left(1), TextEncoding::Utf8), 1);
+    QCOMPARE(incompleteTailBytes(wen.left(2), TextEncoding::Utf8), 2);
+    QCOMPARE(incompleteTailBytes(wen, TextEncoding::Utf8), 0);
+
+    // 「😀」= F0 9F 98 80，4 字节序列。前导字节后面凑不满就不算完整。
+    const QByteArray emoji = QStringLiteral("😀").toUtf8();
+    QCOMPARE(emoji.size(), 4);
+    QCOMPARE(incompleteTailBytes(emoji.left(1), TextEncoding::Utf8), 1);
+    QCOMPARE(incompleteTailBytes(emoji.left(2), TextEncoding::Utf8), 2);
+    QCOMPARE(incompleteTailBytes(emoji.left(3), TextEncoding::Utf8), 3);
+    QCOMPARE(incompleteTailBytes(emoji, TextEncoding::Utf8), 0);
+
+    // 尾部是 ASCII 时前面一定都完整（ASCII 前面不可能是半个多字节序列）
+    QCOMPARE(incompleteTailBytes(QByteArray("温A"), TextEncoding::Utf8), 0);
+    QCOMPARE(incompleteTailBytes(QByteArray("A"), TextEncoding::Utf8), 0);
+
+    // 孤立的续字节本来就非法，该当场变成 U+FFFD，不该被当成"还没收完"留下来
+    QCOMPARE(incompleteTailBytes(QByteArray::fromHex("E6B8"), TextEncoding::Utf8), 2);
+    QCOMPARE(incompleteTailBytes(QByteArray::fromHex("80"), TextEncoding::Utf8), 0);
+    QCOMPARE(incompleteTailBytes(QByteArray(), TextEncoding::Utf8), 0);
+}
+
+void TestTextCodec::utf8_tail_is_zero_for_complete_text()
+{
+    const QByteArray whole = QStringLiteral("温度正常\r\n").toUtf8();
+    QCOMPARE(incompleteTailBytes(whole, TextEncoding::Utf8), 0);
+}
+
+void TestTextCodec::gbk_tail_keeps_a_lone_lead_byte()
+{
+    // 刻意用硬编码的 GBK 字节而不是 toLocal8Bit()：
+    // 后者取的是 Qt 的 C locale 代码页，在非中文 Windows 上与系统 ACP 不一致，
+    // 写进用例就会变成"本机过、CI 跳过"，等于没测。这里测的是纯字节分析，
+    // 不该跟运行环境绑定。「温」在 GBK 里是 CE C2。
+    const QByteArray full = QByteArray::fromHex("CEC2");
+
+    QCOMPARE(incompleteTailBytes(full, TextEncoding::Local), 0);
+    QCOMPARE(incompleteTailBytes(full.left(1), TextEncoding::Local), 1);   // 只有前导字节
+    QCOMPARE(incompleteTailBytes(QByteArray::fromHex("41"), TextEncoding::Local), 0);
+    QCOMPARE(incompleteTailBytes(QByteArray::fromHex("CEC241"), TextEncoding::Local), 0);  // 温A
+    QCOMPARE(incompleteTailBytes(QByteArray(), TextEncoding::Local), 0);
+
+    // 关键用例：CE C2 CE = 「温」+ 半个「温」。前导字节与尾字节在 0x81..0xFE
+    // 上重叠，从末尾倒推会误判成"最后两个已成对、尾巴为 0"；正向扫才认得出
+    // 必须切出 1 字节。这条用例是 GBK 分支必须正向扫描的理由。
+    QCOMPARE(incompleteTailBytes(QByteArray::fromHex("CEC2CE"), TextEncoding::Local), 1);
+
+    // 连续三个汉字完整时不该留尾巴
+    QCOMPARE(incompleteTailBytes(QByteArray::fromHex("CEC2D6C8B0A1"), TextEncoding::Local), 0);
+}
+
+void TestTextCodec::latin1_never_has_a_tail()
+{
+    // Latin1 逐字节映射，每个字节本身就是完整字符，不存在半个。
+    QCOMPARE(incompleteTailBytes(QByteArray::fromHex("5A"), TextEncoding::Latin1), 0);
+    QCOMPARE(incompleteTailBytes(QByteArray::fromHex("E6B8A9"), TextEncoding::Latin1), 0);
+}
+
+void TestTextCodec::take_prefix_carries_the_tail_over()
+{
+    // onFlush 真正走的那条路径：合并 -> 切尾 -> 返回完整段 + 写回尾巴。
+    const QByteArray bytes = QStringLiteral("温A").toUtf8();   // E6 B8 A9 41
+    QByteArray partial;
+
+    QCOMPARE(takeCompletePrefix(&partial, bytes.left(2), TextEncoding::Utf8), QByteArray());
+    QCOMPARE(partial, bytes.left(2));
+
+    QCOMPARE(takeCompletePrefix(&partial, bytes.mid(2), TextEncoding::Utf8), bytes);
+    QCOMPARE(partial.size(), 0);
+
+    // 尾巴指针为 nullptr 时退化成原样返回，不崩
+    QCOMPARE(takeCompletePrefix(nullptr, bytes, TextEncoding::Utf8), bytes);
+}
+
+void TestTextCodec::take_prefix_is_transparent_for_latin1()
+{
+    QByteArray partial;
+    const QByteArray raw = QByteArray::fromHex("E6B8A9FF00");
+    QCOMPARE(takeCompletePrefix(&partial, raw, TextEncoding::Latin1), raw);
+    QCOMPARE(partial.size(), 0);
+}
+
+void TestTextCodec::split_stream_reassembles_to_the_original_text()
+{
+    // 这条钉住的是 2026-10-15 评审发现的缺陷：每批单独解码会让跨批的汉字
+    // 炸成 U+FFFD。模拟 40ms 批次把 UTF-8 流切成 7 字节一段。
+    const QString src = QStringLiteral("AT+温度正常，风速 3.2m/s。");
+    const QByteArray bytes = src.toUtf8();
+
+    QString rebuilt;
+    QByteArray partial;
+    for (qsizetype i = 0; i < bytes.size(); i += 7)
+        rebuilt += decodeText(takeCompletePrefix(&partial, bytes.mid(i, 7), TextEncoding::Utf8),
+                              TextEncoding::Utf8);
+    // 末尾若还有残留，说明末尾本来就不是完整字符；本次输入应以完整字符收尾
+    QCOMPARE(partial.size(), 0);
+    QCOMPARE(rebuilt, src);
+
+    // 不做重组、逐批直接解码，就是修复前的行为 —— 用来证明上面确实修好了什么
+    QString naive;
+    for (qsizetype i = 0; i < bytes.size(); i += 7)
+        naive += decodeText(bytes.mid(i, 7), TextEncoding::Utf8);
+    QVERIFY2(naive != src, "这段输入劈不出替换符，换一段更长的再试；测试本身失去意义");
+    QVERIFY(naive.contains(QChar(0xFFFD)));
+}
 
 void TestTextCodec::utf8_roundtrip_chinese()
 {

@@ -5,6 +5,7 @@
 
 #include <QGroupBox>
 #include <QString>
+#include <QByteArray>
 
 class DirectionHighlighter;
 class QCheckBox;
@@ -90,6 +91,13 @@ private:
     QTimer*         m_timer         = nullptr;
 
     qsizetype       m_limitChars    = kDefaultReceiveLimit;
+
+    // 上一批末尾没凑完整的半个多字节字符，等下一批接上来。
+    // 40ms 的批次边界与字符边界无关，不留着就会让 UTF-8 汉字变成 U+FFFD。
+    // 只在"需要解码的编码"下有意义：HEX 与 Latin1 都逐字节，恒为空。
+    // 换编码、切 HEX、清空、暂停丢弃数据时都必须清掉，否则旧的尾巴会粘到
+    // 不相干的数据上，凭空多出一个错字。
+    QByteArray      m_partial;
 
     SerialPortManager* m_source      = nullptr;
 };
